@@ -61,6 +61,8 @@ const char *to_text(token_type_t ty) {
     return "sizeof";
   case tt::keywordSlice:
     return "slice";
+  case tt::keywordEnum:
+    return "enum";
 
   case tt::literalString:
     return "string literal";
@@ -227,6 +229,8 @@ bool is_keyword(token_type_t ty) {
   case T::keywordImport:
   case T::keywordSizeOf:
   case T::keywordSlice:
+  case T::keywordEnum:
+  case T::keywordUnion:
     return true;
   default:
     return false;

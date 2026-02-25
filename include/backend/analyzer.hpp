@@ -101,6 +101,7 @@ private:
   QT analyze_array_initialize(N);
   QT analyze_attribute(N);
   QT analyze_tuple(N);
+  QT analyze_enum(N);
 
   bool is_static_dispatch(N);
   bool is_dynamic_dispatch(N);
@@ -114,6 +115,7 @@ private:
   QT resolve_receiver(std::optional<specialized_path_t>);
   QT resolve_member_access(QT left, const std::string &member_name);
   QT resolve_tuple_element(QT tuple, const std::string &member_name);
+  QT resolve_enum_element(QT enum_, const std::string &member_name);
 
   QT resolve_binop_result_type(binop_type_t, QT left, QT right);
 

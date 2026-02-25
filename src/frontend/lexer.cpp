@@ -93,6 +93,8 @@ token_type_t keyword(std::string_view kw) {
   if (kw == "import") return tt::keywordImport;
   if (kw == "sizeof") return tt::keywordSizeOf;
   if (kw == "slice") return tt::keywordSlice;
+  if (kw == "enum") return tt::keywordEnum;
+  if (kw == "union") return tt::keywordUnion;
 
   return tt::identifier;
 }

@@ -70,6 +70,7 @@ struct slice_expr_t;
 struct array_initialize_expr_t;
 struct tuple_expr_t;
 struct member_access_expr_t;
+struct enum_decl_t;
 
 enum class literal_type_t {eString, eInteger, eFloat, eBool};
 
@@ -77,7 +78,7 @@ struct ast_node_t {
   ~ast_node_t();
   void reset();
 
-  enum kind_t { eInvalid, eType, eDeclaration, eBinop, eUnary, eSymbol, eStructDecl, eBlock, eFunctionDecl, eFunctionImpl, eExtern, eReturn, eCall, eLiteral, eSelf, eMemberAccess, eAddrOf, eFunctionParameter, eIf, eTypeAlias, eCast, eAssignment, eDeref, eNil, eAttribute, eFor, eWhile, eBinding, eStructExpr, eRangeExpr, eContract, eDefer, eMove, eTemplate, eArrayAccess, eSizeOf, eSliceExpr, eArrayInitializeExpr, eTupleExpr } kind;
+  enum kind_t { eInvalid, eType, eDeclaration, eBinop, eUnary, eSymbol, eStructDecl, eBlock, eFunctionDecl, eFunctionImpl, eExtern, eReturn, eCall, eLiteral, eSelf, eMemberAccess, eAddrOf, eFunctionParameter, eIf, eTypeAlias, eCast, eAssignment, eDeref, eNil, eAttribute, eFor, eWhile, eBinding, eStructExpr, eRangeExpr, eContract, eDefer, eMove, eTemplate, eArrayAccess, eSizeOf, eSliceExpr, eArrayInitializeExpr, eTupleExpr, eEnumDecl } kind;
   struct {
     union {
       type_decl_t *type;
@@ -116,6 +117,7 @@ struct ast_node_t {
       slice_expr_t *slice_expr;
       array_initialize_expr_t *array_initialize_expr;
       tuple_expr_t *tuple_expr;
+      enum_decl_t *enum_decl;
       void *raw;
     };
   } as;
@@ -125,6 +127,7 @@ struct ast_node_t {
 };
 
 struct tuple_decl_t;
+struct union_decl_t;
 
 struct type_decl_t {
   // !u8
@@ -135,10 +138,15 @@ struct type_decl_t {
   bool is_slice = false;
   SP<ast_node_t> len; //< Stack array if not nullptr
   SP<tuple_decl_t> tuple;
+  SP<union_decl_t> union_;
 };
 
 struct tuple_decl_t {
   std::vector<std::pair<std::optional<std::string>, type_decl_t>> elements;
+};
+
+struct union_decl_t {
+  std::map<std::string, type_decl_t> values;
 };
 
 struct contract_decl_t {
@@ -179,6 +187,11 @@ struct struct_decl_t {
   std::string name;
   std::vector<struct_member_t> members;
 };
+
+struct enum_decl_t {
+  std::map<std::string, int64_t> values;
+};
+
 
 struct block_node_t {
   std::vector<SP<ast_node_t>> body;

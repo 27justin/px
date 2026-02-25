@@ -232,7 +232,49 @@ type_registry_t::tuple_of(const std::unordered_map<std::string, SP<type_t>> &ele
   auto t = std::make_shared<type_t>();
   t->kind = eTuple;
   t->as.tuple = new tuple_t {elements};
+
+  uint64_t max_alignment = 0;
+  uint64_t size = 0;
+  for (auto &[_, v] : elements) {
+    max_alignment = v->alignment > max_alignment ? v->alignment : max_alignment;
+    size += v->size;
+  }
+
+  t->alignment = max_alignment;
+  t->size = size;
+
   registry[to_string(t)] = t;
+  return t;
+}
+
+SP<type_t>
+type_registry_t::union_of(const std::map<std::string, SP<type_t>> &elements) {
+  auto t = std::make_shared<type_t>();
+  t->kind = eUnion;
+  t->as.union_ = new union_t {elements};
+
+  uint64_t max_size = 0, max_alignment = 0;
+  for (auto &[_, v] : elements) {
+    max_alignment = v->alignment > max_alignment ? v->alignment : max_alignment;
+    max_size = v->size > max_size ? v->size : max_size;
+  }
+
+  t->alignment = max_alignment;
+  t->size = max_size;
+
+  return t;
+}
+
+SP<type_t>
+type_registry_t::add_enum(const specialized_path_t &name, const enum_decl_t &decl) {
+  auto t = std::make_shared<type_t>();
+  t->kind = eEnum;
+  t->as.enum_ = new enum_t {decl.values};
+  t->name = name;
+  t->size = sizeof(int32_t) * 8;
+  t->alignment = alignof(int32_t);
+
+  registry[to_string(name)] = t;
   return t;
 }
 

@@ -139,6 +139,29 @@ A::resolve_type(const type_decl_t &ty) {
     }
     return base;
   } else {
+    // Might be a tuple.
+    if (ty.tuple) {
+      // Tuples are not non-named composite types
+      std::unordered_map<std::string, QT> tuple_types;
+      int64_t nmemb = 0;
+      for (auto &[k, v] : ty.tuple->elements) {
+        tuple_types[k.value_or(std::to_string(nmemb))] = ensure_concrete(resolve_type(v));
+        nmemb++;
+      }
+      return scope().types.tuple_of(tuple_types);
+    }
+
+    // Might be a union type.
+    if (ty.union_) {
+      std::map<std::string, QT> composite;
+      for (auto &[k, v] : ty.union_->values) {
+        auto ty = resolve_type(v);
+        composite[k] = ty;
+      }
+
+      return scope().types.union_of(composite);
+    }
+
     // Might be a template, which requires monomorphization
     auto template_candidates = scope().candidates(ty.name);
     if (template_candidates.empty()) {
@@ -146,6 +169,7 @@ A::resolve_type(const type_decl_t &ty) {
     }
     return monomorphize(template_candidates.front(), ty.name);
   }
+
   return nullptr;
 }
 
@@ -478,6 +502,15 @@ A::resolve_tuple_element(QT tuple, const std::string &member_name) {
 }
 
 QT
+A::resolve_enum_element(QT enum_, const std::string &member_name) {
+  if (!enum_->as.enum_->values.contains(member_name)) {
+    diagnostics.messages.push_back(error(source, {{0,0},{0,0}}, "Invalid enum element", fmt("Enum element {} is unknown", member_name)));
+    throw analyze_error_t {diagnostics};
+  }
+  return enum_;
+}
+
+QT
 A::resolve_member_access(QT base, const std::string &member_name) {
   switch (base->kind) {
   case type_kind_t::eStruct: {
@@ -509,6 +542,9 @@ A::resolve_member_access(QT base, const std::string &member_name) {
   case type_kind_t::eTuple: {
     return resolve_tuple_element(base, member_name);
   }
+  case type_kind_t::eEnum: {
+    return resolve_enum_element(base, member_name);
+  }
   default:
     break;
   }
@@ -525,6 +561,7 @@ A::analyze_symbol(N node) {
   // 1. `a.b` refers to member `b` on variable `a`
   // 2. `a.b` refers to a fully-specified symbol in global space
   // 3. `a.b` refers to a UFCS, where `a` is a local variable, and `b` refers to a function named like `<type of a>.b`
+  // 4. `a.b` refers to enum value `b`, of enum `a`
   //
   // Generally, 1 has higher precendence over two.
 
@@ -574,6 +611,16 @@ A::analyze_symbol(N node) {
     auto candidates = scope().candidates(path);
     if (!candidates.empty()) {
       return monomorphize(candidates.front(), path);
+    }
+  }
+
+  // We tried resolving templates, paths, and UFCS. If none match, we try resolving for an enum.
+  pcopy = path;
+  pcopy.segments.pop_back();
+
+  if (auto sym = scope().resolve(pcopy)) {
+    if (sym->type->kind == type_kind_t::eEnum) {
+      return resolve_enum_element(sym->type, path.segments.back().name);
     }
   }
 
@@ -1303,11 +1350,17 @@ A::analyze_tuple(N node) {
     if (k.has_value()) {
       resolved_tuple[*k] = analyze_node(v);
     } else {
-      resolved_tuple[std::to_string(nmemb++)] = analyze_node(v);
+      resolved_tuple[std::to_string(nmemb++)] = ensure_concrete(analyze_node(v));
     }
   }
 
   return scope().types.tuple_of(resolved_tuple);
+}
+
+QT
+A::analyze_enum(N node) {
+  enum_decl_t *decl = node->as.enum_decl;
+  return scope().types.add_enum(*current_binding, *decl);
 }
 
 QT
@@ -1442,6 +1495,10 @@ A::analyze_node(N node) {
 
   case ast_node_t::eTupleExpr:
     type = analyze_tuple(node);
+    break;
+
+  case ast_node_t::eEnumDecl:
+    type = analyze_enum(node);
     break;
 
   default:

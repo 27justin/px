@@ -85,7 +85,15 @@ struct untyped_literal_t {
   literal_type_t type;
 };
 
-enum type_kind_t { eStruct, eFunction, eInt, eUint, eFloat, ePointer, eOpaque, eAlias, eVoid, eBool, eArray, eSlice, eContract, eSelf, eRValueReference, eUntypedLiteral, eTuple };
+struct enum_t {
+  std::map<std::string, int64_t> values;
+};
+
+struct union_t {
+  std::map<std::string, SP<type_t>> composite;
+};
+
+enum type_kind_t { eStruct, eFunction, eInt, eUint, eFloat, ePointer, eOpaque, eAlias, eVoid, eBool, eArray, eSlice, eContract, eSelf, eRValueReference, eUntypedLiteral, eTuple, eEnum, eUnion };
 struct type_t {
   type_kind_t kind;
   specialized_path_t name;
@@ -104,6 +112,8 @@ struct type_t {
       rvalue_reference_t *rvalue;
       untyped_literal_t *literal;
       tuple_t *tuple;
+      enum_t *enum_;
+      union_t *union_;
       void *any;
     };
   } as;

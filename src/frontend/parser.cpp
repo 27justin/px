@@ -7,6 +7,7 @@
 #include <iostream>
 #include <sstream>
 #include <cassert>
+#include <string>
 
 using TT = token_type_t;
 using P = parser_t;
@@ -272,9 +273,32 @@ P::parse_tuple_type() {
   return decl;
 }
 
+union_decl_t
+P::parse_union_type() {
+  expect(TT::keywordUnion);
+  expect(TT::delimiterLBrace);
+
+  union_decl_t decl;
+
+  while (!maybe(TT::delimiterRBrace)) {
+    expect(TT::identifier);
+    std::string identifier = source->string(token.location);
+    expect(TT::operatorColon);
+    decl.values[identifier] = parse_type();
+
+    maybe(TT::delimiterSemicolon);
+  }
+  return decl;
+}
+
 type_decl_t
 P::parse_type() {
   type_decl_t decl {};
+
+  if (peek(TT::keywordUnion)) {
+    decl.union_ = std::make_shared<union_decl_t>(parse_union_type());
+    return decl;
+  }
 
   if (maybe(TT::keywordVar)) {
     // var type means pointer type
@@ -855,14 +879,14 @@ P::parse_struct() {
     std::string member_name = source->string(token.location);
 
     expect(TT::operatorColon);
+
     type_decl_t type = parse_type();
-
     maybe(TT::operatorComma);
-
     decl.members.push_back({
         .name = member_name,
         .type = type
       });
+
   }
   return make_node<struct_decl_t>(ast_node_t::eStructDecl, decl, location, source);
 }
@@ -922,6 +946,34 @@ attribute_decl_t P::parse_attributes() {
 }
 
 SP<ast_node_t>
+P::parse_enum() {
+  expect(TT::keywordEnum);
+
+  auto location = token.location;
+
+  expect(TT::delimiterLBrace);
+
+  enum_decl_t decl {};
+  int64_t value = 0;
+  while (!maybe(TT::delimiterRBrace)) {
+    expect(TT::identifier);
+    std::string name = source->string(token.location);
+
+    // We might hardcode the enum value
+    if (maybe(TT::operatorEqual)) {
+      expect(TT::literalInt);
+      value = std::stoll(source->string(token.location));
+    }
+
+    decl.values[name] = value++;
+
+    maybe(TT::operatorComma);
+  }
+
+  return make_node<enum_decl_t>(ast_node_t::eEnumDecl, decl, location, source);
+}
+
+SP<ast_node_t>
 P::parse_binding() {
   SP<ast_node_t> binding {nullptr};
 
@@ -942,6 +994,11 @@ P::parse_binding() {
 
   if (peek(TT::keywordStruct)) {
     binding = parse_struct();
+    goto done;
+  }
+
+  if (peek(TT::keywordEnum)) {
+    binding = parse_enum();
     goto done;
   }
 

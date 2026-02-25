@@ -117,7 +117,7 @@ std::string to_string(const type_t &type) {
     ss << "(";
     auto tuple = type.as.tuple;
     for (auto it = tuple->elements.begin(); it != tuple->elements.end(); ++it) {
-      ss << it->first << ": " << it->second;
+      ss << it->first << ": " << to_string(it->second);
       if (it != tuple->elements.end())
         ss << ", ";
     }

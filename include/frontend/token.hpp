@@ -36,6 +36,8 @@ enum class token_type_t {
   keywordImport,
   keywordSizeOf,
   keywordSlice,
+  keywordEnum,
+  keywordUnion,
 
   literalString,
   literalInt,
