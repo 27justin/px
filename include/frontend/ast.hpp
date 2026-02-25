@@ -1,5 +1,6 @@
 #pragma once
 
+#include <unordered_map>
 #include <vector>
 #include <string>
 #include <memory>
@@ -67,7 +68,7 @@ struct array_access_expr_t;
 struct sizeof_expr_t;
 struct slice_expr_t;
 struct array_initialize_expr_t;
-
+struct tuple_expr_t;
 struct member_access_expr_t;
 
 enum class literal_type_t {eString, eInteger, eFloat, eBool};
@@ -76,7 +77,7 @@ struct ast_node_t {
   ~ast_node_t();
   void reset();
 
-  enum kind_t { eInvalid, eType, eDeclaration, eBinop, eUnary, eSymbol, eStructDecl, eBlock, eFunctionDecl, eFunctionImpl, eExtern, eReturn, eCall, eLiteral, eSelf, eMemberAccess, eAddrOf, eFunctionParameter, eIf, eTypeAlias, eCast, eAssignment, eDeref, eNil, eAttribute, eFor, eWhile, eBinding, eStructExpr, eRangeExpr, eContract, eDefer, eMove, eTemplate, eArrayAccess, eSizeOf, eSliceExpr, eArrayInitializeExpr } kind;
+  enum kind_t { eInvalid, eType, eDeclaration, eBinop, eUnary, eSymbol, eStructDecl, eBlock, eFunctionDecl, eFunctionImpl, eExtern, eReturn, eCall, eLiteral, eSelf, eMemberAccess, eAddrOf, eFunctionParameter, eIf, eTypeAlias, eCast, eAssignment, eDeref, eNil, eAttribute, eFor, eWhile, eBinding, eStructExpr, eRangeExpr, eContract, eDefer, eMove, eTemplate, eArrayAccess, eSizeOf, eSliceExpr, eArrayInitializeExpr, eTupleExpr } kind;
   struct {
     union {
       type_decl_t *type;
@@ -114,6 +115,7 @@ struct ast_node_t {
       sizeof_expr_t *sizeof_expr;
       slice_expr_t *slice_expr;
       array_initialize_expr_t *array_initialize_expr;
+      tuple_expr_t *tuple_expr;
       void *raw;
     };
   } as;
@@ -121,6 +123,7 @@ struct ast_node_t {
   SP<type_t> type; //< Type for code generation
   SP<source_t> source; //< Source file this node is from
 };
+
 
 struct type_decl_t {
   // !u8
@@ -130,6 +133,12 @@ struct type_decl_t {
 
   bool is_slice = false;
   SP<ast_node_t> len; //< Stack array if not nullptr
+  bool is_tuple = false;
+  std::vector<type_decl_t> tuple_elements;
+};
+
+struct tuple_decl_t {
+  std::unordered_map<std::string, type_decl_t> members;
 };
 
 struct contract_decl_t {
@@ -326,6 +335,10 @@ struct slice_expr_t {
 
 struct array_initialize_expr_t {
   std::vector<SP<ast_node_t>> values;
+};
+
+struct tuple_expr_t {
+  std::vector<std::pair<std::optional<std::string>, SP<ast_node_t>>> elements;
 };
 
 std::string to_string(const type_decl_t &);

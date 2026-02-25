@@ -1,0 +1,12 @@
+
+main := fn () -> i32 {
+  // Tuples
+
+  // Unnamed tuple
+  let tuple1: (i32, i32) = (1, 1);
+
+  // Named tuple
+  let tuple2: (r: i8, g: i8, b: i8) = (r: 255, g: 0, b: 0);
+
+  tuple2.r
+}

@@ -469,6 +469,15 @@ A::analyze_declaration(N node) {
 }
 
 QT
+A::resolve_tuple_element(QT tuple, const std::string &member_name) {
+  if (!tuple->as.tuple->elements.contains(member_name)) {
+    diagnostics.messages.push_back(error(source, {{0,0},{0,0}}, "Invalid tuple element", fmt("Tuple element {} is unknown", member_name)));
+    throw analyze_error_t {diagnostics};
+  }
+  return tuple->as.tuple->elements.at(member_name);
+}
+
+QT
 A::resolve_member_access(QT base, const std::string &member_name) {
   switch (base->kind) {
   case type_kind_t::eStruct: {
@@ -496,6 +505,9 @@ A::resolve_member_access(QT base, const std::string &member_name) {
   }
   case type_kind_t::ePointer: {
     return resolve_member_access(base->as.pointer->deref(), member_name);
+  }
+  case type_kind_t::eTuple: {
+    return resolve_tuple_element(base, member_name);
   }
   default:
     break;
@@ -1281,6 +1293,24 @@ A::analyze_attribute(N node) {
 }
 
 QT
+A::analyze_tuple(N node) {
+  tuple_expr_t *expr = node->as.tuple_expr;
+
+  auto hinted_type = type_hint();
+  std::unordered_map<std::string, QT> resolved_tuple;
+  uint64_t nmemb = 0;
+  for (auto &[k, v] : expr->elements) {
+    if (k.has_value()) {
+      resolved_tuple[*k] = analyze_node(v);
+    } else {
+      resolved_tuple[std::to_string(nmemb++)] = analyze_node(v);
+    }
+  }
+
+  return scope().types.tuple_of(resolved_tuple);
+}
+
+QT
 A::analyze_node(N node) {
   QT type {};
 
@@ -1408,6 +1438,10 @@ A::analyze_node(N node) {
 
   case ast_node_t::eAttribute:
     type = analyze_attribute(node);
+    break;
+
+  case ast_node_t::eTupleExpr:
+    type = analyze_tuple(node);
     break;
 
   default:

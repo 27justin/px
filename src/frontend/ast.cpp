@@ -65,6 +65,19 @@ void dump_ast(ast_node_t &node, size_t indent_val) {
 
   std::cout << indent();
   switch (node.kind) {
+  case ast_node_t::eTupleExpr: {
+    tuple_expr_t *tuple = node.as.tuple_expr;
+    std::cout << "[Tuple (";
+
+    for (auto &[k, v] : tuple->elements) {
+      if (k) std::cout << *k << ": ";
+      dump_ast(*v);
+      std::cout << ", ";
+    }
+
+    std::cout << ")]";
+    return;
+  }
   case ast_node_t::eRangeExpr: {
     range_expr_t *expr = node.as.range_expr;
     std::cout << "[Range ";

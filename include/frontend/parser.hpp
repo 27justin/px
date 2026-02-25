@@ -69,6 +69,9 @@ private:
   SP<ast_node_t> parse_array_initializer();
   attribute_decl_t parse_attributes();
 
+  tuple_decl_t parse_tuple_type();
+  SP<ast_node_t> parse_tuple_expression();
+
   SP<ast_node_t> parse_if();
   SP<ast_node_t> parse_while();
   SP<ast_node_t> parse_for();

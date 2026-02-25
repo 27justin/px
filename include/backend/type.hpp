@@ -2,6 +2,7 @@
 
 #include "frontend/path.hpp"
 #include <memory>
+#include <unordered_map>
 #include <vector>
 #include <map>
 
@@ -60,6 +61,10 @@ struct slice_t {
   bool is_mutable;
 };
 
+struct tuple_t {
+  std::unordered_map<std::string, SP<type_t>> elements;
+};
+
 struct function_signature_t {
   std::shared_ptr<type_t> return_type;
   std::vector<std::shared_ptr<type_t>> arg_types;
@@ -80,7 +85,7 @@ struct untyped_literal_t {
   literal_type_t type;
 };
 
-enum type_kind_t { eStruct, eFunction, eInt, eUint, eFloat, ePointer, eOpaque, eAlias, eVoid, eBool, eArray, eSlice, eContract, eSelf, eRValueReference, eUntypedLiteral };
+enum type_kind_t { eStruct, eFunction, eInt, eUint, eFloat, ePointer, eOpaque, eAlias, eVoid, eBool, eArray, eSlice, eContract, eSelf, eRValueReference, eUntypedLiteral, eTuple };
 struct type_t {
   type_kind_t kind;
   specialized_path_t name;
@@ -98,6 +103,7 @@ struct type_t {
       contract_t *contract;
       rvalue_reference_t *rvalue;
       untyped_literal_t *literal;
+      tuple_t *tuple;
       void *any;
     };
   } as;

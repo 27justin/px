@@ -228,6 +228,15 @@ SP<type_t> type_registry_t::self_placeholder(const specialized_path_t& owner_nam
 }
 
 SP<type_t>
+type_registry_t::tuple_of(const std::unordered_map<std::string, SP<type_t>> &elements) {
+  auto t = std::make_shared<type_t>();
+  t->kind = eTuple;
+  t->as.tuple = new tuple_t {elements};
+  registry[to_string(t)] = t;
+  return t;
+}
+
+SP<type_t>
 type_registry_t::rvalue_of(SP<type_t> base) {
   auto type = std::make_shared<type_t>();
   type->size = base->size;

@@ -237,6 +237,41 @@ P::parse_specialized_path() {
   return path;
 }
 
+tuple_decl_t
+P::parse_tuple_type() {
+  tuple_decl_t decl {};
+  expect(TT::delimiterLParen);
+
+
+  // Tuples can have named members.
+
+  for (int64_t nmemb = 0;; ++nmemb) {
+    auto $token = token;
+    std::string identifier;
+    try {
+      lexer.push();
+      // Look for a name, this might be omitted.
+      expect(TT::identifier);
+      identifier = source->string(token.location);
+      expect(TT::operatorColon);
+      lexer.commit();
+    } catch (...) {
+      diagnostics.messages.pop_back();
+      identifier = std::to_string(nmemb);
+      lexer.pop();
+      token = $token;
+    }
+
+    decl.members[identifier] = parse_type();
+    if (peek(TT::delimiterRParen))
+      break;
+    expect(TT::operatorComma);
+  }
+
+  expect(TT::delimiterRParen);
+  return decl;
+}
+
 type_decl_t
 P::parse_type() {
   type_decl_t decl {};
@@ -255,6 +290,12 @@ P::parse_type() {
       decl.is_slice = true;
     }
     expect(TT::delimiterRBracket);
+  }
+
+  if (peek(TT::delimiterLParen)) {// Tuple
+    decl.is_tuple = true;
+    tuple_decl_t tuple = parse_tuple_type();
+    return decl;
   }
 
   while (maybe(TT::operatorExclamation) || maybe(TT::operatorQuestion)) {
@@ -446,6 +487,39 @@ P::parse_array_initializer() {
 }
 
 SP<ast_node_t>
+P::parse_tuple_expression() {
+  expect(TT::delimiterLParen);
+
+  auto start = token.location.start;
+  if (maybe(TT::delimiterRParen)) {
+    return make_node<tuple_expr_t>(ast_node_t::eTupleExpr, {}, {start, token.location.end}, source);
+  }
+
+  std::vector<std::pair<std::optional<std::string>, SP<ast_node_t>>> elements;
+  uint64_t nmemb = 0;
+  auto parse_element = [&]() {
+    std::pair<std::optional<std::string>, SP<ast_node_t>> elem {};
+    // Check for named element: 'name: expr'
+    if (lexer.peek().type == TT::identifier && lexer.peek(1).type == TT::operatorColon) {
+      expect(TT::identifier);
+      elem.first = source->string(token.location);
+      expect(TT::operatorColon);
+    }
+    elem.second = parse_expression(0, true);
+    return elem;
+  };
+
+  do {
+    elements.emplace_back(parse_element());
+    if (!maybe(TT::operatorComma))
+      break;
+  } while (token.type != TT::delimiterRParen);
+
+  expect(TT::delimiterRParen);
+  return make_node<tuple_expr_t>(ast_node_t::eTupleExpr, {.elements = elements}, {start, token.location.end}, source);
+}
+
+SP<ast_node_t>
 P::parse_primary(bool allow_struct_literal) {
   SP<ast_node_t> primary = nullptr;
 
@@ -509,9 +583,7 @@ P::parse_primary(bool allow_struct_literal) {
     return parse_array_initializer();
   }
   case TT::delimiterLParen:
-    expect(TT::delimiterLParen);
-    primary = parse_expression(0, allow_struct_literal);
-    expect(TT::delimiterRParen);
+    return parse_tuple_expression();
   default:
     break;
   }
