@@ -245,9 +245,9 @@ P::parse_tuple_type() {
 
   // Tuples can have named members.
 
-  for (int64_t nmemb = 0;; ++nmemb) {
+  for (;;) {
     auto $token = token;
-    std::string identifier;
+    std::optional<std::string> identifier;
     try {
       lexer.push();
       // Look for a name, this might be omitted.
@@ -256,13 +256,13 @@ P::parse_tuple_type() {
       expect(TT::operatorColon);
       lexer.commit();
     } catch (...) {
+      identifier = std::nullopt;
       diagnostics.messages.pop_back();
-      identifier = std::to_string(nmemb);
       lexer.pop();
       token = $token;
     }
 
-    decl.members[identifier] = parse_type();
+    decl.elements.emplace_back(identifier, parse_type());
     if (peek(TT::delimiterRParen))
       break;
     expect(TT::operatorComma);
@@ -293,8 +293,8 @@ P::parse_type() {
   }
 
   if (peek(TT::delimiterLParen)) {// Tuple
-    decl.is_tuple = true;
     tuple_decl_t tuple = parse_tuple_type();
+    decl.tuple = std::make_shared<tuple_decl_t>(tuple);
     return decl;
   }
 

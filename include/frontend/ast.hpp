@@ -124,6 +124,7 @@ struct ast_node_t {
   SP<source_t> source; //< Source file this node is from
 };
 
+struct tuple_decl_t;
 
 struct type_decl_t {
   // !u8
@@ -133,12 +134,11 @@ struct type_decl_t {
 
   bool is_slice = false;
   SP<ast_node_t> len; //< Stack array if not nullptr
-  bool is_tuple = false;
-  std::vector<type_decl_t> tuple_elements;
+  SP<tuple_decl_t> tuple;
 };
 
 struct tuple_decl_t {
-  std::unordered_map<std::string, type_decl_t> members;
+  std::vector<std::pair<std::optional<std::string>, type_decl_t>> elements;
 };
 
 struct contract_decl_t {

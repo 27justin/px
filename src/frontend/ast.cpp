@@ -367,6 +367,21 @@ std::string to_string(const type_decl_t &type) {
     }
   }
 
+  if (type.tuple) {
+    ss << "(";
+
+    for (auto i = 0; i < type.tuple->elements.size(); ++i) {
+      if (type.tuple->elements[i].first)
+        ss << *type.tuple->elements[i].first << ": ";
+      ss << to_string(type.tuple->elements[i].second);
+
+      if (i < type.tuple->elements.size() - 1)
+        ss << ", ";
+    }
+
+    ss << ")";
+  }
+
   ss << to_string(type.name);
   return ss.str();
 }
