@@ -153,19 +153,18 @@ bool P::peek(TT ty) {
 void
 P::parse_generic_specifier(template_segment_t &segment) {
   std::vector<generic_t> generics {};
-  do {
-    generic_t generic;
-    expect(TT::identifier);
-    generic.binding = source->string(token.location);
 
-    if (maybe(TT::operatorColon)) {
-      // Specifier
-      generic.constraints.push_back(parse_specialized_path());
-    }
-    generics.push_back(generic);
-  } while (maybe(TT::operatorComma));
+  generic_t generic;
+  expect(TT::identifier);
+  generic.binding = source->string(token.location);
 
-  segment.bindings.insert(segment.bindings.begin(), generics.begin(), generics.end());
+  if (maybe(TT::operatorColon)) {
+    // Specifier
+    generic.constraints.push_back(parse_specialized_path());
+  }
+  generics.push_back(generic);
+
+  segment.bindings.insert(segment.bindings.end(), generics.begin(), generics.end());
 }
 
 template_path_t
@@ -179,8 +178,10 @@ P::parse_template_path() {
     try {
       lexer.push();
       if (maybe(TT::delimiterLAngle)) {
-        expect(TT::operatorAt); // Placeholder token
-        parse_generic_specifier(segment);
+        do {
+          expect(TT::operatorAt); // Placeholder token
+          parse_generic_specifier(segment);
+        } while (maybe(TT::operatorComma));
         expect(TT::delimiterRAngle);
       }
 
@@ -212,9 +213,11 @@ P::parse_specialized_path() {
     try {
       lexer.push();
       if (maybe(TT::delimiterLAngle)) {
-        auto type = std::make_shared<type_decl_t>(parse_type());
+        do {
+          auto type = std::make_shared<type_decl_t>(parse_type());
+          segment.types.push_back(type);
+        } while (maybe(TT::operatorComma));
         expect(TT::delimiterRAngle);
-        segment.types.push_back(type);
       }
 
       path.segments.push_back(segment);
@@ -942,21 +945,24 @@ P::is_specialized_path() {
 
   // A specialized path is a path which is templated, but has no generics.
   // E.g. `std.vector<@T>` is not a specialized path
-  //      `std.vector<bool>`, however is.
+  //      `std.vector<bool>`, is.
 
   bool match = false;
   while(maybe(TT::identifier)) {
     if (maybe(TT::delimiterLAngle)) {
       match = true;
 
-      if (maybe(TT::operatorAt)) {
-        // Placeholders directly violate our specialization
-        // requirement
-        match = false;
-        break;
-      }
+      do {
+        if (maybe(TT::operatorAt)) {
+          // Placeholders directly violate our specialization
+          // requirement
+          match = false;
+          goto exit;
+        }
 
-      parse_type();
+        parse_type();
+      } while (maybe(TT::operatorComma));
+
       expect(TT::delimiterRAngle);
     }
 
@@ -965,6 +971,7 @@ P::is_specialized_path() {
     else
       break;
   }
+  exit:
 
   lexer.pop();
   this->token = token;
@@ -985,15 +992,17 @@ P::is_templated_path() {
     if (maybe(TT::delimiterLAngle)) {
       match = true;
 
-      if (!maybe(TT::operatorAt)) {
-        // Placeholders directly violate our specialization
-        // requirement
-        match = false;
-        break;
-      }
+      do {
+        if (!maybe(TT::operatorAt)) {
+          // Placeholders directly violate our specialization
+          // requirement
+          match = false;
+          goto exit;
+        }
 
-      template_segment_t segment {};
-      parse_generic_specifier(segment);
+        template_segment_t segment {};
+        parse_generic_specifier(segment);
+      } while (maybe(TT::operatorComma));
 
       expect(TT::delimiterRAngle);
     }
@@ -1003,6 +1012,7 @@ P::is_templated_path() {
     else
       break;
   }
+  exit:
 
   lexer.pop();
   this->token = token;

@@ -1,28 +1,8 @@
-A<@T> := struct {
-  a: i64
-}
+import std.string
 
-A<@T>.empty := fn (!self) -> bool {
-  true
-}
-
-
-B := struct {
-  a: A<i32>
-}
-
-B.empty := fn (!self) -> bool {
-  self.a.empty()
-}
-
-
-main := fn () {
-  let s: B = B {
-    a: A {
-      a: 9
-    }
-  };
-
-  s.empty();
+main := fn () -> i32 {
+  let str: std.string = std.string.init("42");
+  std.convert<std.string, i32>(&str);
+  str.convert<i32>()
 }
 
