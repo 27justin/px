@@ -264,13 +264,16 @@ A::analyze_function_impl(N node, SP<type_t> implicit_receiver) {
   // Register parameters
   for (auto &param : impl->declaration.parameters) {
     if (param.is_self == false) {
-      scope().add(param.name, resolve_type(param.type), param.is_mutable);
+      auto ty = resolve_type(param.type);
+      scope().add(param.name, ty, param.is_mutable);
+      param.resolved_type = ty;
     } else {
       auto self = implicit_receiver;
       if (param.is_self_ref) {
         self = scope().types.pointer_to(self, {pointer_kind_t::eNonNullable}, param.is_mutable);
       }
       scope().add("self", implicit_receiver, param.is_mutable);
+      param.resolved_type = self;
     }
   }
 
@@ -322,6 +325,7 @@ A::analyze_block(N node) {
     last_type = analyze_node(v);
   }
 
+  block->resolved_return_type = last_type;
   return block->has_implicit_return ? last_type : resolve_type("void");
 }
 
@@ -405,6 +409,12 @@ A::analyze_call(N node) {
     }
   }
 
+  // The remaining arguments (for variadic functions), can't be type
+  // checked. But they still have to be analyzed.
+  for (auto i = signature->arg_types.size(); i < call->arguments.size(); ++i) {
+    analyze_node(call->arguments[i]);
+  }
+
   return fn->as.function->return_type;
 }
 
@@ -417,7 +427,13 @@ A::analyze_literal(N node) {
     return scope().types.array_of(resolve_type("u8"), literal->value.size());
   case literal_type_t::eInteger:
   case literal_type_t::eFloat:
-    return scope().types.untyped_literal(literal->value, literal->type);
+    // If we have a type hint (from e.g. `let int: i32 = 1`), we know
+    // that we are a i32, otherwise we make it untyped to resolve
+    // later.
+    if (type_hint())
+      return type_hint();
+    else
+      return scope().types.untyped_literal(literal->value, literal->type);
   case literal_type_t::eBool:
     return resolve_type("bool");
   default:
@@ -1141,7 +1157,7 @@ A::analyze_sizeof(N node) {
   if (auto ty = resolve_type(path); ty) {
     node->kind = ast_node_t::eLiteral;
     node->as.literal_expr = new literal_expr_t {
-      .value = std::format("{}", ty->size / 8),
+      .value = std::format("{}", size_of(ty) / 8),
       .type = literal_type_t::eInteger
     };
   }
@@ -1149,7 +1165,7 @@ A::analyze_sizeof(N node) {
   if (auto sym = scope().resolve(path); sym) {
     node->kind = ast_node_t::eLiteral;
     node->as.literal_expr = new literal_expr_t {
-      .value = std::format("{}", sym->type->size / 8),
+      .value = std::format("{}", size_of(sym->type) / 8),
       .type = literal_type_t::eInteger
     };
   }
@@ -1162,6 +1178,7 @@ A::analyze_array_access(N node) {
   array_access_expr_t *expr = node->as.array_access_expr;
 
   QT array_type = analyze_node(expr->value);
+  QT offset_type = analyze_node(expr->offset);
 
   if (array_type->kind == type_kind_t::ePointer)
     return array_type->as.pointer->deref();
@@ -1364,6 +1381,18 @@ A::analyze_enum(N node) {
 }
 
 QT
+A::analyze_uninitialized(N) {
+  // This expression has no real type, we default to the type hint.
+  return type_hint();
+}
+
+QT
+A::analyze_zero(N) {
+  // This expression has no real type, we default to the type hint.
+  return type_hint();
+}
+
+QT
 A::analyze_node(N node) {
   QT type {};
 
@@ -1501,10 +1530,18 @@ A::analyze_node(N node) {
     type = analyze_enum(node);
     break;
 
+  case ast_node_t::eUninitialized:
+    type = analyze_uninitialized(node);
+    break;
+
+  case ast_node_t::eZero:
+    type = analyze_zero(node);
+    break;
+
   default:
     assert(false && "Unhandled AST node in analyzer");
   }
 
-  node->type = type;
+  node->type = ensure_concrete(type);
   return type;
 }

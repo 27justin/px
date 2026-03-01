@@ -49,6 +49,7 @@ struct pointer_t {
   SP<type_t> base;
 
   SP<type_t> deref() const;
+  static SP<type_t> pointer_to(pointer_kind_t, SP<type_t>, bool = false);
 };
 
 struct array_t {
@@ -123,6 +124,13 @@ struct type_t {
   bool is_numeric() const;
 
   bool operator ==(const type_t &other) const;
+
+  // Return the "base type".
+  // This returns nullptr in every case, except in these:
+  //  1. Arrays -> returns the element type
+  //  2. Slices -> returns the element type
+  //  3. Pointers -> returns next indirection (or concrete)
+  SP<type_t> base_type();
 
   static SP<type_t> make_slice(SP<type_t>, bool is_mutable);
 };

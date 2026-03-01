@@ -1,8 +1,7 @@
-import std.string
+libc.printf := @(extern: "C", import: "printf") fn (_: !u8, ..)
 
-main := fn () -> i32 {
-  let str: std.string = std.string.init("42");
-  std.convert<std.string, i32>(&str);
-  str.convert<i32>()
+main := fn ()  {
+  let i: i32 = uninitialized;
+  libc.printf("Hey, you're %s! (%i)\n", "back", i);
 }
 

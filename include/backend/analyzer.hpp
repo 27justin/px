@@ -102,6 +102,8 @@ private:
   QT analyze_attribute(N);
   QT analyze_tuple(N);
   QT analyze_enum(N);
+  QT analyze_zero(N);
+  QT analyze_uninitialized(N);
 
   bool is_static_dispatch(N);
   bool is_dynamic_dispatch(N);

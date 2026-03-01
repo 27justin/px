@@ -5,35 +5,23 @@ Statically compiled programming language.
 # Example
 
 #+BEGIN_SRC px
-print := @(extern: "C", import: "printf") fn (_: !u8, ..)
 
-job := contract {
-  run := fn (!self)
+rgb := type (r: i8, g: i8, b: i8)
+
+rectangle := struct {
+  size: (f32, f32)
 }
 
-run_all := fn (queue: []job) {
-  for j in 0..queue.size {
-    queue[j].run();
-  }
+circle := struct {
+  radius: f32
 }
 
-send_email := struct { email: []u8 }
-generate_report := struct { id: i32 }
-
-send_email.run := fn (!self) {
-  print("email -> %s\n", self.email);
+drawable := contract {
+  draw: fn (!self, color: rgb)
 }
 
-generate_report.run := fn (!self) {
-  print("report #%d\n", self.id);
+draw := fn (obj: drawable, color: rgb) {
+obj.draw(color)
 }
 
-main := fn () {
-  let tasks: []job = [
-    send_email { name: "alice@example.com" } as job,
-    generate_report { id: 42 } as job
-  ];
-
-  run_all(tasks);
-}
 SRC

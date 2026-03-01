@@ -16,6 +16,56 @@ using TU = translation_unit_t;
 using std::make_unique;
 using std::make_shared;
 
+std::string substitute_string_escape_characters(const std::string &input) {
+  std::string result;
+  result.reserve(input.size());
+
+  for (size_t i = 0; i < input.size(); ++i) {
+    if (input[i] == '\\' && i + 1 < input.size()) {
+      i++; // Consume the backslash
+      switch (input[i]) {
+      case 'n': result += '\n'; break;
+      case 'r': result += '\r'; break;
+      case 't': result += '\t'; break;
+      case '\\': result += '\\'; break;
+      case '\"': result += '\"'; break;
+      case 'x': {
+        // Peek ahead to see how many hex digits we have
+        std::string hex_str;
+        size_t j = i + 1;
+        while (j < input.size() && j < i + 5 && isxdigit(input[j])) {
+          hex_str += input[j];
+          j++;
+        }
+
+        if (!hex_str.empty()) {
+          // Convert hex string to integer
+          unsigned long value = std::stoul(hex_str, nullptr, 16);
+
+          // If it's 4 digits (\x0049), we treat it as two bytes: 0x00 and 0x49
+          if (hex_str.size() > 2) {
+            result += static_cast<char>((value >> 8) & 0xFF);
+            result += static_cast<char>(value & 0xFF);
+          } else {
+            result += static_cast<char>(value & 0xFF);
+          }
+          i = j - 1; // Advance the main loop counter
+        } else {
+          result += 'x'; // Just a literal 'x' if no digits follow
+        }
+        break;
+      }
+      default:
+        result += input[i]; // Unknown escape, just keep the character
+        break;
+      }
+    } else {
+      result += input[i];
+    }
+  }
+  return result;
+}
+
 std::pair<int, int> get_binding_power(TT type) {
   switch (type) {
   // Assignment
@@ -229,6 +279,8 @@ P::parse_specialized_path() {
       }
     } catch (...) {
       diagnostics.messages.pop_back();
+      // If we errored, this is not a path, but instead something else. (likely a binop)
+      segment.types.erase(segment.types.begin(), segment.types.end());
       path.segments.push_back(segment);
       lexer.pop();
       this->token = current_token;
@@ -574,7 +626,7 @@ P::parse_primary(bool allow_struct_literal) {
     expect(TT::literalString);
     primary = make_node<literal_expr_t>(
       ast_node_t::eLiteral, {
-          .value = source->string(token.location),
+        .value = substitute_string_escape_characters(source->string(token.location)),
           .type = literal_type_t::eString,
         }, token.location, source);
     return primary;
@@ -608,6 +660,12 @@ P::parse_primary(bool allow_struct_literal) {
   }
   case TT::delimiterLParen:
     return parse_tuple_expression();
+  case TT::keywordZero:
+    expect(TT::keywordZero);
+    return make_node(ast_node_t::eZero, token.location, source);
+  case TT::keywordUninitialized:
+    expect(TT::keywordUninitialized);
+    return make_node(ast_node_t::eUninitialized, token.location, source);
   default:
     break;
   }
@@ -651,7 +709,7 @@ P::parse_for() {
   // 1. Check for "for i in" or "for i :="
   // We look ahead to see if the first identifier is a loop variable
   if (lexer.peek().type == TT::identifier &&
-      (lexer.peek(1).type == TT::keywordIn || lexer.peek(1).type == TT::operatorBind)) {
+      (lexer.peek(1).type == TT::keywordIn || lexer.peek(1).type == TT::operatorBind || lexer.peek(1).type == TT::operatorColon)) {
     expect(TT::identifier);
     for_stmt.init = make_node<declaration_t>(ast_node_t::eDeclaration, {.identifier = source->string(token.location), .value = make_node<literal_expr_t>(ast_node_t::eLiteral, {.value = "0", .type = literal_type_t::eInteger}, token.location, source), .is_mutable = true}, location, source);
 
@@ -669,6 +727,7 @@ P::parse_for() {
   } else {
     // Case: for 0..num_files
     // No iterator name, just a range expression
+    for_stmt.init = make_node<declaration_t>(ast_node_t::eDeclaration, {.identifier = "_", .value = make_node<literal_expr_t>(ast_node_t::eLiteral, {.value = "0", .type = literal_type_t::eInteger}, token.location, source)}, token.location, source);
     for_stmt.condition = parse_expression(0, false);
   }
 

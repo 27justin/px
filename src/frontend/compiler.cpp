@@ -41,9 +41,9 @@ int main(int argc, char **argv) {
         //   dump_ast(*node);
         // }
 
-        // codegen_t codegen(std::move(su));
-        // codegen.generate();
-        // codegen.compile_to_object(file.replace_extension("").filename());
+        codegen_t codegen(std::move(su));
+        codegen.generate();
+        codegen.compile_to_object(file.replace_extension("").filename());
       } catch (const parse_error_t &err) {
         for (auto &msg : err.diagnostics.messages) {
           std::cerr << serialize(msg) << "\n";

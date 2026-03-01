@@ -95,6 +95,8 @@ token_type_t keyword(std::string_view kw) {
   if (kw == "slice") return tt::keywordSlice;
   if (kw == "enum") return tt::keywordEnum;
   if (kw == "union") return tt::keywordUnion;
+  if (kw == "uninitialized") return tt::keywordUninitialized;
+  if (kw == "zero") return tt::keywordZero;
 
   return tt::identifier;
 }

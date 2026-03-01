@@ -65,6 +65,11 @@ void dump_ast(ast_node_t &node, size_t indent_val) {
 
   std::cout << indent();
   switch (node.kind) {
+  case ast_node_t::eSizeOf: {
+    sizeof_expr_t *expr = node.as.sizeof_expr;
+    std::cout << "[Sizeof " << to_string(expr->value) << "]";
+    return;
+  }
   case ast_node_t::eTupleExpr: {
     tuple_expr_t *tuple = node.as.tuple_expr;
     std::cout << "[Tuple (";
@@ -380,6 +385,15 @@ std::string to_string(const type_decl_t &type) {
     }
 
     ss << ")";
+  }
+
+  if (type.union_) {
+    union_decl_t *decl = type.union_.get();
+    ss << "union {";
+    for (auto &[_, v] : decl->values) {
+      ss << to_string(v) << ", ";
+    }
+    ss << "}";
   }
 
   ss << to_string(type.name);

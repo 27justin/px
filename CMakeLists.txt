@@ -17,14 +17,14 @@ add_executable(jcc
   src/backend/type_registry.cpp
   src/backend/scope.cpp
   src/backend/type.cpp
-  #src/backend/codegen.cpp
+  src/backend/codegen.cpp
   src/frontend/compiler.cpp)
 
 target_include_directories(jcc PUBLIC include)
 
-# ======
+# =======
 #   LLVM
-# ======
+# =======
 find_package(LLVM REQUIRED CONFIG)
 
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")

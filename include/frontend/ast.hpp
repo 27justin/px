@@ -78,7 +78,7 @@ struct ast_node_t {
   ~ast_node_t();
   void reset();
 
-  enum kind_t { eInvalid, eType, eDeclaration, eBinop, eUnary, eSymbol, eStructDecl, eBlock, eFunctionDecl, eFunctionImpl, eExtern, eReturn, eCall, eLiteral, eSelf, eMemberAccess, eAddrOf, eFunctionParameter, eIf, eTypeAlias, eCast, eAssignment, eDeref, eNil, eAttribute, eFor, eWhile, eBinding, eStructExpr, eRangeExpr, eContract, eDefer, eMove, eTemplate, eArrayAccess, eSizeOf, eSliceExpr, eArrayInitializeExpr, eTupleExpr, eEnumDecl } kind;
+  enum kind_t { eInvalid, eType, eDeclaration, eBinop, eUnary, eSymbol, eStructDecl, eBlock, eFunctionDecl, eFunctionImpl, eExtern, eReturn, eCall, eLiteral, eSelf, eMemberAccess, eAddrOf, eFunctionParameter, eIf, eTypeAlias, eCast, eAssignment, eDeref, eNil, eAttribute, eFor, eWhile, eBinding, eStructExpr, eRangeExpr, eContract, eDefer, eMove, eTemplate, eArrayAccess, eSizeOf, eSliceExpr, eArrayInitializeExpr, eTupleExpr, eEnumDecl, eZero, eUninitialized } kind;
   struct {
     union {
       type_decl_t *type;
@@ -196,6 +196,7 @@ struct enum_decl_t {
 struct block_node_t {
   std::vector<SP<ast_node_t>> body;
   bool has_implicit_return;
+  SP<type_t> resolved_return_type = nullptr;
 };
 
 struct function_decl_t {
@@ -264,6 +265,8 @@ struct function_parameter_t {
   bool is_self = false;
   bool is_self_ref = false;
   bool is_rvalue = false;
+
+  SP<type_t> resolved_type;
 };
 
 struct if_stmt_t {

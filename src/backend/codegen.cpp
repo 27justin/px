@@ -2,13 +2,16 @@
 #include "backend/analyzer.hpp"
 #include "backend/type.hpp"
 #include "frontend/ast.hpp"
+#include "frontend/path.hpp"
 #include "frontend/token.hpp"
 #include "llvm/IR/Attributes.h"
+#include "llvm/IR/CmpPredicate.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Instruction.h"
 
 #include <filesystem>
 #include <llvm/Support/TargetSelect.h>
@@ -24,18 +27,25 @@
 #include <llvm/Support/FileSystem.h>
 
 #include <memory>
+#include <optional>
 #include <stdexcept>
+
+#ifdef VISITOR
+#undef VISITOR
+#endif
+
+#define VISITOR(name) SP<llvm_value_t> \
+    codegen_t::visit_##name(SP<ast_node_t> node)
 
 template<typename T> using SP = std::shared_ptr<T>;
 
-llvm_value_t *
-llvm_scope_t::add(const std::string &name, const llvm_value_t &value) {
-  auto val = new llvm_value_t{value};
-  symbol_map[name] = val;
-  return val;
+SP<llvm_value_t>
+llvm_scope_t::set(const std::string &name, SP<llvm_value_t> value) {
+  symbol_map[name] = value;
+  return value;
 }
 
-llvm_value_t *
+SP<llvm_value_t>
 llvm_scope_t::resolve(const std::string &name) {
   if (symbol_map.contains(name))
     return symbol_map[name];
@@ -46,35 +56,8 @@ llvm_scope_t::resolve(const std::string &name) {
   return nullptr;
 }
 
-llvm::Value *
-codegen_t::make_slice_from_array(SP<type_t> arr_meta, llvm::Value *array_ptr) {
-  assert(arr_meta->kind == type_kind_t::eArray);
-
-  // 1. Get the Slice Struct Type: []T
-  // We assume you have a way to get the slice type from the element type
-  SP<type_t> slice_type = type_t::make_slice(arr_meta->as.array->element_type, true);
-  llvm::Type* llvm_slice_ty = ensure_type(slice_type);
-
-  // 2. "Decay" the array pointer to the first element pointer
-  // Equivalent to: &array[0]
-  // We use {0, 0} because array_ptr is a pointer to the array [N x T]*
-  llvm::Value* zero = builder->getInt32(0);
-  llvm::Value* head_ptr = builder->CreateInBoundsGEP(
-    ensure_type(arr_meta), // The [N x T] type
-    array_ptr,
-    {zero, zero},
-    "slice.decay"
-    );
-
-  // 3. Get the length as a constant
-  llvm::Value* len = builder->getInt64(arr_meta->as.array->size);
-
-  // 4. Build the Aggregate { ptr, len }
-  llvm::Value* slice = llvm::UndefValue::get(llvm_slice_ty);
-  slice = builder->CreateInsertValue(slice, head_ptr, 0);
-  slice = builder->CreateInsertValue(slice, len, 1);
-
-  return slice;
+SP<llvm_scope_t> codegen_t::scope() {
+  return scopes.back();
 }
 
 void
@@ -139,9 +122,9 @@ llvm::Type *codegen_t::ensure_type(SP<type_t> type) {
     result = llvm::Type::getInt1Ty(*context);
     break;
   case type_kind_t::eStruct: {
-    result = llvm::StructType::getTypeByName(*context, type->name);
+    result = llvm::StructType::getTypeByName(*context, to_string(type->name));
     if (!result) {
-      auto st = llvm::StructType::create(*context, type->name);
+      auto st = llvm::StructType::create(*context, to_string(type->name));
 
       std::vector<llvm::Type *> fields;
       auto layout = type->as.struct_layout;
@@ -222,12 +205,31 @@ codegen_t::load(llvm::Type *type, const llvm_value_t &val) {
 
     // If it's a pointer (like an alloca), we need the value inside
     if (!val.is_rvalue) {
-      return llvm_value_t {builder->CreateLoad(type, val.value), true};
+      return llvm_value_t {builder->CreateLoad(type, val.value), type, true};
     }
     return val;
 }
 
-llvm_value_t *
+llvm_value_t
+codegen_t::load(SP<llvm_value_t> value) {
+  return load(value->type, *value);
+}
+
+llvm_value_t
+codegen_t::load(const llvm_value_t &value) {
+  return load(value.type, value);
+}
+
+llvm_value_t
+codegen_t::cast(llvm::Type *type, const llvm_value_t &value) {
+  if (type->isIntegerTy() && value.type->isIntegerTy()) {
+    return llvm_value_t{builder->CreateZExtOrTrunc(load(value).value, type),
+                        type, true};
+  }
+  throw std::runtime_error ("Unhandled cast");
+}
+
+SP<llvm_value_t>
 codegen_t::address_of(SP<ast_node_t> node) {
   addr_of_expr_t *expr = node->as.addr_of;
   switch (expr->value->kind) {
@@ -235,11 +237,12 @@ codegen_t::address_of(SP<ast_node_t> node) {
     auto id = to_string(expr->value->as.symbol->path);
     // The result of an address of is an rvalue (don't need to load,
     // that would be a deref.)
-    return new llvm_value_t { scopes.back()->resolve(id)->value, true};
+    auto val = scopes.back()->resolve(id);
+    return std::make_shared<llvm_value_t>(val->value, val->type, true);
   }
   case ast_node_t::eDeref: {
     auto result = visit_node(node->as.deref_expr->value);
-    return new llvm_value_t{load(ensure_type(node->type), *result)};
+    return std::make_shared<llvm_value_t>(load(ensure_type(node->type), *result));
   }
   default:
     throw std::runtime_error("Non lvalue address of doesn't work.");
@@ -247,131 +250,83 @@ codegen_t::address_of(SP<ast_node_t> node) {
   return nullptr;
 }
 
-llvm_value_t *
-codegen_t::visit_extern(SP<ast_node_t> node) {
-  extern_decl_t *decl = node->as.extern_decl;
+SP<llvm_value_t>
+codegen_t::visit_binding(SP<ast_node_t> node) {
+  binding_decl_t *decl = node->as.binding_decl;
+  current_binding = decl->name;
+  return scope()->set(to_string(decl->name), visit_node(decl->value));
+}
 
-  extern_ = true;
-  auto *value = visit_node(decl->import);
-  extern_ = false;
+VISITOR(function_decl) {
+  function_decl_t *decl = node->as.fn_decl;
+
+  std::string name = external_name ? external_name.value() : to_string(*current_binding);
+  bool is_import = external_name.has_value();
+
+  auto llvm_type = ensure_type(node->type);
+  llvm::FunctionType *llvm_fn = llvm::dyn_cast<llvm::FunctionType>(llvm_type);
+
+  auto func = llvm::Function::Create(llvm_fn, llvm::GlobalValue::ExternalLinkage, name, *module);
+
+  if (is_import && to_string(*current_binding) != name) {
+    std::string asmAlias = ".set " + to_string(*current_binding) + ", " + name;
+    module->appendModuleInlineAsm(asmAlias);
+  }
+
+  return scope()->set(to_string(*current_binding), std::make_shared<llvm_value_t>(func, llvm_fn, false));
+}
+
+VISITOR(attribute) {
+  attribute_decl_t *attr = node->as.attribute_decl;
+
+  if (attr->attributes.contains("extern")) {
+    external_name = attr->attributes.at("import").value;
+  }
+
+  auto value = visit_node(attr->affect);
+
+  if (attr->attributes.contains("extern")) {
+    external_name = std::nullopt;
+  }
 
   return value;
 }
 
-llvm_value_t *
-codegen_t::visit_function_decl(SP<ast_node_t> node) {
-  auto fn_decl = node->as.fn_decl;
-
-  auto fn_type = ensure_type(node->type);
-
-  auto func = llvm::Function::Create(llvm::dyn_cast<llvm::FunctionType>(fn_type),
-                                     extern_ ? llvm::GlobalValue::ExternalLinkage
-                                 : llvm::GlobalValue::ExternalLinkage,
-                                     to_string(fn_decl->name), *module);
-
-  if (!extern_) {
-    llvm::BasicBlock *block = llvm::BasicBlock::Create(*context, "entry", func);
-    builder->SetInsertPoint(block);
-  }
-
-  // Add the function to our scope.
-  return scopes.back()->add(to_string(fn_decl->name), llvm_value_t{func, false});
-}
-
-llvm_value_t *
+SP<llvm_value_t>
 codegen_t::visit_function_impl(SP<ast_node_t> node) {
-  auto fn_impl = node->as.fn_impl;
-  llvm_value_t *value = nullptr;
+  function_impl_t *impl = node->as.fn_impl;
 
-  auto decl = fn_impl->declaration->as.fn_decl;
+  auto llvm_type = ensure_type(node->type);
+  llvm::FunctionType *llvm_fn = llvm::dyn_cast<llvm::FunctionType>(llvm_type);
 
-  value = visit_node(fn_impl->declaration);
-  auto llvm_func = llvm::dyn_cast<llvm::Function>(value->value);
+  auto func = llvm::Function::Create(llvm_fn, llvm::GlobalValue::ExternalLinkage, to_string(*current_binding), *module);
+  auto ret_val = scope()->set(to_string(*current_binding), std::make_shared<llvm_value_t>(func, llvm_fn, false));
+
+  llvm::BasicBlock *entry = llvm::BasicBlock::Create(*context, "entry", func);
+  builder->SetInsertPoint(entry);
 
   scopes.emplace_back(std::make_shared<llvm_scope_t>(scopes.back()));
 
-  // Create the stack space for the arguments
-  for (int64_t i = 0; i < decl->parameters.size(); ++i) {
-    auto type = ensure_type(decl->parameters[i]->type);
-    auto param = decl->parameters[i]->as.fn_param;
-
-    bool is_rvalue = true;
-    llvm::Value *arg = llvm_func->args().begin() + i;
-    if (param->is_mutable) {
-      is_rvalue = false;
-
-      if (param->is_self && param->is_self_ref) {
-        // We don't need to store the self pointer on the stack, it's
-        // already a stack address we can most definitely write to.
-      } else {
-        auto store = builder->CreateAlloca(arg->getType());
-        builder->CreateStore(arg, store);
-        arg = store;
-      }
-    }
-
-    scopes.back()->add(param->name, llvm_value_t{arg, is_rvalue});
+  for (uint64_t i = 0; i < impl->declaration.parameters.size(); ++i) {
+    auto &param = impl->declaration.parameters[i];
+    auto ty = ensure_type(param.resolved_type);
+    scope()->set(param.name, std::make_shared<llvm_value_t>(func->args().begin() + i));
   }
 
-  auto block = fn_impl->block->as.block;
-  visit_node(fn_impl->block);
+  auto result = visit_node(impl->block);
+  if (result) {
+    builder->CreateRet(result->value);
+  } else {
+    builder->CreateRetVoid();
+  }
 
   scopes.pop_back();
-  return value;
+  return ret_val;
 }
 
-llvm_value_t *
-codegen_t::visit_block(SP<ast_node_t> node) {
-  auto block = node->as.block;
+VISITOR(call) {
+  call_expr_t *call = node->as.call_expr;
 
-  for (auto &n : block->body)
-    visit_node(n);
-
-  return nullptr;
-}
-
-void codegen_t::visit_return(SP<ast_node_t> node) {
-  return_stmt_t *stmt = node->as.return_stmt;
-  if ( stmt->value )
-    builder->CreateRet(load(ensure_type(stmt->value->type), *visit_node(stmt->value)).value);
-  else
-    builder->CreateRetVoid();
-}
-
-llvm_value_t *
-codegen_t::visit_literal(SP<ast_node_t> node) {
-  literal_expr_t *expr = node->as.literal_expr;
-
-  llvm::Value *value = nullptr;
-  switch (expr->type) {
-  case literal_type_t::eInteger: {
-    value = llvm::ConstantInt::get(ensure_type(node->type), std::stoi(expr->value));
-    break;
-  }
-  case literal_type_t::eBool: {
-    value = llvm::ConstantInt::get(ensure_type(node->type), expr->value == "true");
-    break;
-  }
-  case literal_type_t::eFloat: {
-    value = llvm::ConstantFP::get(ensure_type(node->type), std::stof(expr->value));
-    break;
-  }
-  case literal_type_t::eString: {
-    value = builder->CreateGlobalString(expr->value, "", 0, module.get());
-    break;
-  }
-  default:
-    assert(false && "Internal Compiler Error: unsupported literal");
-    break;
-  }
-  return new llvm_value_t {value, true};
-}
-
-llvm_value_t *
-codegen_t::visit_call(SP<ast_node_t> node) {
-  auto call = node->as.call_expr;
-
-  llvm::Value *value = nullptr;
   llvm::FunctionType *func = llvm::dyn_cast<llvm::FunctionType>(ensure_type(call->callee->type));
 
   std::vector<llvm::Value *> args;
@@ -381,19 +336,28 @@ codegen_t::visit_call(SP<ast_node_t> node) {
   }
 
   auto callee = visit_node(call->callee);
-  value = builder->CreateCall(func, callee->value, args);
-  return new llvm_value_t{value, true};
+  llvm::Value *value = builder->CreateCall(func, callee->value, args);
+
+  return std::make_shared<llvm_value_t>(value, func->getReturnType(), true);
 }
 
-llvm_value_t *
-codegen_t::visit_symbol(SP<ast_node_t> node) {
-  symbol_expr_t *symbol = node->as.symbol;
-  return scopes.back()->resolve(to_string(symbol->path));
+VISITOR(block) {
+  block_node_t *block = node->as.block;
+
+  SP<llvm_value_t> value {nullptr};
+
+  for (auto &v : block->body) {
+    value = visit_node(v);
+  }
+
+  if (block->has_implicit_return)
+    return value;
+  else
+    return nullptr;
 }
 
-llvm_value_t *
-codegen_t::visit_declaration(SP<ast_node_t> node) {
-  declaration_t *stmt = node->as.declaration;
+VISITOR(declaration) {
+  declaration_t *decl = node->as.declaration;
 
   llvm::Type *value_type = ensure_type(node->type);
   llvm::Value *storage = builder->CreateAlloca(value_type);
@@ -401,9 +365,30 @@ codegen_t::visit_declaration(SP<ast_node_t> node) {
   // Is the declaration an lvalue (i.e. has an address and requires
   // loading)
   bool is_lvalue = true;
-  if (stmt->value) {
-    auto init = visit_node(stmt->value);
-    builder->CreateStore(load(ensure_type(stmt->value->type), *init).value, storage);
+  if (decl->value) {
+    switch (decl->value->kind) {
+    case ast_node_t::eZero:
+      // Explicit `zero` keyword.
+      builder->CreateStore(llvm::ConstantInt::getNullValue(value_type), storage);
+      break;
+
+    case ast_node_t::eUninitialized:
+      // Explicit `uninitialized` keyword
+      break;
+
+    default: {
+      auto init = visit_node(decl->value);
+
+      auto val = load(ensure_type(decl->value->type), *init);
+
+      if (val.type != value_type) {
+        val = cast(value_type, val);
+      }
+
+      builder->CreateStore(val.value, storage);
+      break;
+    }
+    }
   } else {
     // Zero initialize by default
     builder->CreateStore(llvm::ConstantInt::getNullValue(value_type), storage);
@@ -414,389 +399,266 @@ codegen_t::visit_declaration(SP<ast_node_t> node) {
     is_lvalue = false;
   }
 
-  return scopes.back()->add(stmt->identifier, llvm_value_t{storage, !is_lvalue});
+  return scopes.back()->set(decl->identifier, std::make_shared<llvm_value_t>(storage, value_type, !is_lvalue));
 }
 
-llvm_value_t *
-codegen_t::visit_struct_definition(SP<ast_node_t> node) {
-  struct_decl_t *decl = node->as.struct_decl;
-  ensure_type(node->type);
-  return nullptr;
-}
+VISITOR(literal) {
+  literal_expr_t *expr = node->as.literal_expr;
 
-llvm_value_t *
-codegen_t::visit_binop(SP<ast_node_t> node) {
-  binop_expr_t *binop = node->as.binop;
-
-  auto L = visit_node(binop->left);
-  auto R = visit_node(binop->right);
-
-  llvm::Value *result = nullptr;
-  switch (binop->op) {
-  case binop_type_t::eEqual: {
-    result = builder->CreateCmp(
-        llvm::CmpInst::ICMP_EQ, load(ensure_type(binop->left->type), *L).value,
-        load(ensure_type(binop->right->type), *R).value);
+  llvm::Type *type = ensure_type(node->type);
+  llvm::Value *value = nullptr;
+  switch (expr->type) {
+  case literal_type_t::eInteger: {
+    value = llvm::ConstantInt::get(type, std::stoi(expr->value));
     break;
   }
-  case binop_type_t::eNotEqual: {
-    result = builder->CreateCmp(
-        llvm::CmpInst::ICMP_NE, load(ensure_type(binop->left->type), *L).value,
-        load(ensure_type(binop->right->type), *R).value);
+  case literal_type_t::eBool: {
+    value = llvm::ConstantInt::get(type, expr->value == "true");
     break;
   }
-  case binop_type_t::eLT: {
-    result = builder->CreateCmp(llvm::CmpInst::ICMP_SLT,
-                                load(ensure_type(binop->left->type), *L).value,
-                                load(ensure_type(binop->right->type), *R).value);
+  case literal_type_t::eFloat: {
+    value = llvm::ConstantFP::get(type, std::stof(expr->value));
     break;
   }
-  case binop_type_t::eGT: {
-    result = builder->CreateCmp(
-        llvm::CmpInst::ICMP_SGT, load(ensure_type(binop->left->type), *L).value,
-        load(ensure_type(binop->right->type), *R).value);
+  case literal_type_t::eString: {
+    value = builder->CreateGlobalString(expr->value, "", 0, module.get());
     break;
-  }
-  case binop_type_t::eLTE: {
-    result = builder->CreateCmp(
-        llvm::CmpInst::ICMP_SLE, load(ensure_type(binop->left->type), *L).value,
-        load(ensure_type(binop->right->type), *R).value);
-    break;
-  }
-  case binop_type_t::eGTE: {
-    result = builder->CreateCmp(
-        llvm::CmpInst::ICMP_SGE, load(ensure_type(binop->left->type), *L).value,
-        load(ensure_type(binop->right->type), *R).value);
-    break;
-  }
-  case binop_type_t::eSubtract: {
-    result =
-        builder->CreateSub(load(ensure_type(binop->left->type), *L).value,
-                           load(ensure_type(binop->right->type), *R).value);
-    break;
-  }
-  case binop_type_t::eAdd: {
-    auto l_val = load(ensure_type(binop->left->type), *L).value;
-    auto r_val = load(ensure_type(binop->right->type), *R).value;
-
-    if (l_val->getType()->isPointerTy()) {
-      auto type = ensure_type(binop->left->type->as.pointer->deref());
-
-      // Pointer + Integer
-      return new llvm_value_t{builder->CreateGEP(type, l_val, r_val), true};
-
-    } else if (r_val->getType()->isPointerTy()) {
-      auto type = ensure_type(binop->right->type->as.pointer->deref());
-
-      // Integer + Pointer
-      return new llvm_value_t{builder->CreateGEP(type, r_val, l_val), true};
-    } else {
-      // Normal Integer addition
-      result = builder->CreateAdd(l_val, r_val);
-    }
-    break;
-  }
-  case binop_type_t::eMultiply: {
-    result =
-        builder->CreateMul(load(ensure_type(binop->left->type), *L).value,
-                           load(ensure_type(binop->right->type), *R).value);
-    break;
-  }
-  case binop_type_t::eMod: {
-    result =
-      builder->CreateSRem(load(ensure_type(binop->left->type), *L).value,
-                         load(ensure_type(binop->right->type), *R).value);
-    break;
-  }
-  default: {
-    assert(false && "Missing binop type!");
-  }
-  }
-  return new llvm_value_t {result, true};
-}
-
-llvm_value_t *
-codegen_t::visit_cast(SP<ast_node_t> node) {
-  cast_expr_t *expr = node->as.cast;
-
-  auto into = node->type;
-  auto from = expr->value->type;
-
-  // Casting from a stack array to a slice is a special operation.
-  if (into->kind == type_kind_t::eSlice && from->kind == type_kind_t::eArray) {
-    auto lhs = visit_node(expr->value);
-    return new llvm_value_t {
-      make_slice_from_array(from, lhs->value), true
-    };
-  }
-
-  // Casting bigger ints into smaller ones give a truncate
-  if (into->is_numeric() && from->is_numeric()) {
-    auto lhs = visit_node(expr->value);
-    if (into->size > from->size) {
-      // Zero extend
-      return new llvm_value_t {
-        builder->CreateZExt(load(ensure_type(from), *lhs).value, ensure_type(into)),
-        true
-      };
-    } else {
-      // Truncate
-      return new llvm_value_t {
-        builder->CreateTruncOrBitCast(load(ensure_type(from), *lhs).value, ensure_type(into)),
-        true
-      };
-    }
-  }
-
-  if (ensure_type(into) != ensure_type(from)) {
-    auto lhs = visit_node(expr->value);
-    return new llvm_value_t{builder->CreateBitOrPointerCast(load(ensure_type(into), *lhs).value, ensure_type(into)), true};
-  }
-
-  return new llvm_value_t{load(ensure_type(into), *visit_node(expr->value))};
-}
-
-llvm_value_t *
-codegen_t::visit_assignment(SP<ast_node_t> node) {
-  assign_expr_t *expr = node->as.assign_expr;
-
-  auto RHS = visit_node(expr->value);
-  auto LHS = visit_node(expr->where);
-
-  RHS = new llvm_value_t {load(ensure_type(expr->value->type), *RHS)};
-  if (LHS->is_rvalue) {
-    LHS = new llvm_value_t {load(ensure_type(expr->where->type), *LHS)};
-  }
-
-  return new llvm_value_t{builder->CreateStore(RHS->value, LHS->value), false};
-}
-
-llvm_value_t *
-codegen_t::visit_member_access(SP<ast_node_t> node) {
-  member_access_expr_t *expr = node->as.member_access;
-
-  // Get the struct type
-  auto native_type = expr->object->type;
-
-  // Native type might be a pointer, if it is, we assume that we want
-  // to access the member behind the pointer.
-  if (native_type->kind == type_kind_t::ePointer) {
-    native_type = native_type->as.pointer->base;
-  }
-
-  if (native_type->kind == type_kind_t::eSlice) {
-    auto slice_info = visit_node(expr->object);
-    uint32_t idx = (expr->member == "ptr") ? 0 : 1;
-
-    if (slice_info->is_rvalue == false) {
-      // If it's a variable on the stack, GEP to the field
-      auto field_ptr = builder->CreateStructGEP(ensure_type(native_type), slice_info->value, idx);
-      return new llvm_value_t(field_ptr, false);
-    } else {
-      // If it's a temporary value, extract the field
-      auto field_val = builder->CreateExtractValue(slice_info->value, {idx});
-      return new llvm_value_t(field_val, true);
-    }
-  }
-
-  if (native_type->kind == type_kind_t::eArray) {
-    auto array_info = visit_node(expr->object);
-
-    if (expr->member == "size") {
-      return new llvm_value_t{llvm::ConstantInt::get(builder->getInt64Ty(), native_type->as.array->size), true};
-    }
-
-    if (expr->member == "ptr") {
-      return new llvm_value_t { array_info->value, true };
-    }
-  }
-
-  assert(native_type->kind == type_kind_t::eStruct);
-
-  auto native_struct = native_type->as.struct_layout;
-
-  auto llvm_type = ensure_type(native_type);
-  assert(llvm_type->isStructTy());
-
-  auto llvm_struct = llvm::dyn_cast<llvm::StructType>(llvm_type);
-
-  int64_t member_id = 0;
-  // Lookup the member in our struct
-  auto member = native_struct->member(expr->member);
-  if (!member) {
-    throw std::runtime_error(expr->member + " not found in struct.");
-  }
-
-  member_id = member - &*native_struct->members.begin();
-  std::vector<llvm::Value *> indices = {
-    builder->getInt32(0),                  // Dereference the pointer
-    builder->getInt32((uint32_t)member_id) // The specific field index
-  };
-  return new llvm_value_t {builder->CreateGEP(llvm_type, visit_node(expr->object)->value, indices), false};
-}
-
-llvm_value_t *
-codegen_t::visit_attribute(SP<ast_node_t> node) {
-  attribute_decl_t *decl = node->as.attribute_decl;
-  auto &attributes = decl->attributes;
-
-  auto value = visit_node(decl->affect);
-
-  if (auto func = llvm::dyn_cast_or_null<llvm::Function>(value->value)) {
-    if (attributes.contains("import")) {
-      auto import_as = attributes.at("import");
-      auto alias_name = func->getName();
-
-      std::string asmAlias = ".set " + alias_name.str() + ", " + import_as.value;
-      module->appendModuleInlineAsm(asmAlias);
-    }
-  }
-  return value;
-}
-
-llvm_value_t *
-codegen_t::visit_deref(SP<ast_node_t> node) {
-  deref_expr_t *deref = node->as.deref_expr;
-  auto value = visit_node(deref->value);
-
-  return new llvm_value_t {builder->CreateLoad(ensure_type(deref->value->type), value->value), value->is_rvalue};
-}
-
-llvm_value_t *
-codegen_t::visit_nil(SP<ast_node_t> node) {
-  return new llvm_value_t{llvm::ConstantPointerNull::get(llvm::dyn_cast<llvm::PointerType>(ensure_type(node->type))), true};
-}
-
-void
-codegen_t::visit_if(SP<ast_node_t> node) {
-  if_stmt_t *stmt = node->as.if_stmt;
-
-  auto cond = visit_node(stmt->condition);
-
-  auto *parent = builder->GetInsertBlock()->getParent();
-  llvm::BasicBlock *pass = llvm::BasicBlock::Create(*context, "if.then", parent),
-    *reject = llvm::BasicBlock::Create(*context, "if.else"),
-    *merge = llvm::BasicBlock::Create(*context, "if.end");
-  llvm::BasicBlock *else_dest = stmt->reject ? reject : merge;
-
-  builder->CreateCondBr(load(builder->getIntNTy(1), *cond).value, pass, else_dest);
-
-  builder->SetInsertPoint(pass);
-  visit_block(stmt->pass);
-  if (!builder->GetInsertBlock()->getTerminator()) {
-    builder->CreateBr(merge);
-  }
-
-  if (stmt->reject) {
-    builder->SetInsertPoint(reject);
-    visit_block(stmt->reject);
-    if (!builder->GetInsertBlock()->getTerminator()) {
-      builder->CreateBr(merge);
-    }
-  }
-
-  parent->insert(parent->end(), merge);
-  builder->SetInsertPoint(merge);
-}
-
-void
-codegen_t::visit_for(SP<ast_node_t> node) {
-  for_stmt_t *stmt = node->as.for_stmt;
-
-  auto *parent = builder->GetInsertBlock()->getParent();
-
-  // 1. Create the blocks
-  // We attach 'condition' immediately so the 'init' block has somewhere to jump to
-  llvm::BasicBlock *cond = llvm::BasicBlock::Create(*context, "for.cond", parent);
-  llvm::BasicBlock *body = llvm::BasicBlock::Create(*context, "for.body", parent);
-  llvm::BasicBlock *action = llvm::BasicBlock::Create(*context, "for.inc", parent);
-  llvm::BasicBlock *merge = llvm::BasicBlock::Create(*context, "for.end", parent);
-
-  if (stmt->init) {
-    visit_node(stmt->init);
-  }
-
-  // Jump to the condition
-  builder->CreateBr(cond);
-
-  builder->SetInsertPoint(cond);
-  if (stmt->condition) {
-    auto cond_val = visit_node(stmt->condition);
-    llvm::Value *is_true = load(builder->getIntNTy(1), *cond_val).value;
-    builder->CreateCondBr(is_true, body, merge);
-  } else {
-    builder->CreateBr(body);
-  }
-
-  builder->SetInsertPoint(body);
-  visit_block(stmt->body);
-
-  if (!builder->GetInsertBlock()->getTerminator()) {
-    builder->CreateBr(action);
-  }
-
-  builder->SetInsertPoint(action);
-  if (stmt->action) {
-    visit_node(stmt->action);
-  }
-
-  builder->CreateBr(cond);
-  builder->SetInsertPoint(merge);
-}
-
-void
-codegen_t::visit_while(SP<ast_node_t> node) {
-  while_stmt_t *stmt = node->as.while_stmt;
-
-  auto *parent = builder->GetInsertBlock()->getParent();
-
-  llvm::BasicBlock *cond = llvm::BasicBlock::Create(*context, "while.cond", parent);
-  llvm::BasicBlock *body = llvm::BasicBlock::Create(*context, "while.body", parent);
-  llvm::BasicBlock *merge = llvm::BasicBlock::Create(*context, "while.end", parent);
-
-  builder->CreateBr(cond);
-
-  builder->SetInsertPoint(cond);
-  if (stmt->condition) {
-    auto cond_val = visit_node(stmt->condition);
-    llvm::Value *is_true = load(builder->getIntNTy(1), *cond_val).value;
-    builder->CreateCondBr(is_true, body, merge);
-  }
-
-  builder->SetInsertPoint(body);
-  visit_block(stmt->body);
-
-  if (!builder->GetInsertBlock()->getTerminator()) {
-    builder->CreateBr(cond);
-  }
-  builder->SetInsertPoint(merge);
-}
-
-llvm_value_t *
-codegen_t::visit_unary(SP<ast_node_t> node) {
-  unary_expr_t *expr = node->as.unary;
-
-  switch (expr->op) {
-  case token_type_t::operatorExclamation: {
-    // Pointer coercion, does nothing here, LLVM doesn't care.
-    return visit_node(expr->value);
   }
   default:
-    assert(false && "Unhandled unary operation");
+    assert(false && "Internal Compiler Error: unsupported literal");
+    break;
   }
+  return std::make_shared<llvm_value_t>(value, type, true);
+}
+
+VISITOR(symbol) {
+  symbol_expr_t *symbol = node->as.symbol;
+  return scope()->resolve(to_string(symbol->path));
+}
+
+VISITOR(address_of) {
+  return address_of(node);
+}
+
+llvm::Instruction::BinaryOps
+codegen_t::map_binop_type(llvm::Type *left, llvm::Type *right, binop_type_t ty) {
+  using I = llvm::Instruction;
+
+  bool is_float = left->isFloatingPointTy() || right->isFloatingPointTy();
+
+  switch (ty) {
+  case binop_type_t::eAdd:
+    return is_float ? I::FAdd : I::Add;
+
+  case binop_type_t::eSubtract:
+    return is_float ? I::FSub : I::Sub;
+
+  case binop_type_t::eDivide:
+    // TODO: SDiv vs UDiv
+    return is_float ? I::FDiv : I::SDiv;
+
+  case binop_type_t::eMultiply:
+    return is_float ? I::FMul : I::Mul;
+
+  case binop_type_t::eAnd:
+    return I::And;
+
+  case binop_type_t::eOr:
+    return I::Or;
+
+  case binop_type_t::eMod:
+    return is_float ? I::FRem : I::SRem;
+
+  default:
+    throw std::runtime_error ("Internal Compiler Error: Unhandled binop type");
+  }
+}
+
+bool codegen_t::is_scalar_binop(binop_type_t ty) {
+  using T = binop_type_t;
+  switch (ty) {
+  case T::eAdd:
+  case T::eSubtract:
+  case T::eDivide:
+  case T::eMultiply:
+  case T::eAnd:
+  case T::eOr:
+  case T::eMod:
+    return true;
+  default:
+    return false;
+  }
+}
+
+VISITOR(binop) {
+  binop_expr_t *expr = node->as.binop;
+
+  llvm::Type *left_type = ensure_type(expr->left->type);
+  llvm::Type *right_type = ensure_type(expr->right->type);
+  llvm::Type *result_type = nullptr;
+
+  auto left = visit_node(expr->left);
+  auto right = visit_node(expr->right);
+
+  if (left_type->isIntOrPtrTy() && right_type->isIntOrPtrTy()) {
+    // Figure out the bitsize of each type, we coalesce to the biggest
+    // variant.
+    if (left_type->getIntegerBitWidth() > right_type->getIntegerBitWidth())
+      result_type = left_type;
+    else
+      result_type = right_type;
+
+    if (is_scalar_binop(expr->op)) {
+      if (left_type != result_type) {
+        left = std::make_shared<llvm_value_t>(builder->CreateIntCast(load(left_type, *left).value, result_type, true), result_type, true);
+        left_type = result_type;
+      }
+
+      if (right_type != result_type) {
+        right = std::make_shared<llvm_value_t>(builder->CreateIntCast(load(right_type, *right).value, result_type, true), result_type, true);
+        right_type = result_type;
+      }
+
+      auto intermediate = builder->CreateBinOp(map_binop_type(left_type, right_type, expr->op), load(left_type, *left).value, load(right_type, *right).value);
+      return std::make_shared<llvm_value_t>(builder->CreateZExtOrTrunc(intermediate, result_type), result_type, true);
+    } else {
+      // Probably comparision
+      bool is_float = left_type->isFloatingPointTy() || right_type->isFloatingPointTy();
+      llvm::Value *value = nullptr;
+
+      using P = llvm::CmpInst::Predicate;
+      P inst;
+      switch (expr->op) {
+      case binop_type_t::eEqual:
+        inst = is_float ? P::FCMP_OEQ : P::ICMP_EQ;
+        break;
+
+      case binop_type_t::eNotEqual:
+        inst = is_float ? P::FCMP_ONE : P::ICMP_NE;
+        break;
+
+      case binop_type_t::eGT:
+        inst = is_float ? P::FCMP_OGT : P::ICMP_SGT;
+        break;
+
+      case binop_type_t::eLT:
+        inst = is_float ? P::FCMP_OLT : P::ICMP_SLT;
+        break;
+
+      case binop_type_t::eGTE:
+        inst = is_float ? P::FCMP_OGE : P::ICMP_SGE;
+        break;
+
+      case binop_type_t::eLTE:
+        inst = is_float ? P::FCMP_OLE : P::ICMP_SLE;
+        break;
+
+      default:
+        throw std::runtime_error ("Internal Compiler Error: Unhandled non-scalar binary operation.");
+        break;
+      }
+
+      return std::make_shared<llvm_value_t>(builder->CreateICmp(inst, load(left_type, *left).value, load(right_type, *right).value), result_type, true);
+    }
+  }
+  throw std::runtime_error ("Internal Compiler Error: Unhandled types in binary operation.");
   return nullptr;
 }
 
-llvm_value_t *
+VISITOR(array_access) {
+  array_access_expr_t *expr = node->as.array_access_expr;
+
+  auto base_val = visit_node(expr->value);
+  auto offset_val = visit_node(expr->offset);
+
+  llvm::Value* base = base_val->value;
+  llvm::Value* offset = load(builder->getInt32Ty(), *offset_val).value;
+
+  auto element_type = expr->value->type->base_type();
+
+  llvm::Value* address = builder->CreateGEP(ensure_type(element_type), base, {offset}, "array_idx");
+
+  return std::make_shared<llvm_value_t>(load(ensure_type(element_type), llvm_value_t(address, ensure_type(pointer_t::pointer_to(pointer_kind_t::eNonNullable, element_type, true)), false)));
+}
+
+VISITOR(for) {
+    auto* stmt = node->as.for_stmt;
+    auto* function = builder->GetInsertBlock()->getParent();
+
+    scopes.emplace_back(scopes.back());
+
+    // Standard blocks
+    llvm::BasicBlock* condBB = llvm::BasicBlock::Create(*context, "for.cond", function);
+    llvm::BasicBlock* bodyBB = llvm::BasicBlock::Create(*context, "for.body", function);
+    llvm::BasicBlock* actionBB = llvm::BasicBlock::Create(*context, "for.action", function);
+    llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(*context, "for.merge", function);
+
+    auto init = visit_node(stmt->init);
+    builder->CreateBr(condBB);
+
+    // 2. Handle Condition (Specialized for Ranges)
+    builder->SetInsertPoint(condBB);
+
+    if (stmt->condition && stmt->condition->kind == ast_node_t::eRangeExpr) {
+        auto* range = stmt->condition->as.range_expr;
+
+        llvm::Value* max = cast(init->type, load(visit_node(range->max))).value;
+
+        // Condition: iter < max (or <= if inclusive)
+        llvm::Value* cmp;
+        if (range->is_inclusive)
+          cmp = builder->CreateICmpSLE(load(init).value, max, "range_cmp");
+        else
+          cmp = builder->CreateICmpSLT(load(init).value, max, "range_cmp");
+
+        builder->CreateCondBr(cmp, bodyBB, mergeBB);
+    } else if (stmt->condition) {
+        // Standard boolean condition (for i := 0; i < 10; ...)
+        auto cond_val = visit_node(stmt->condition);
+        builder->CreateCondBr(cond_val->value, bodyBB, mergeBB);
+    } else {
+        builder->CreateBr(bodyBB);
+    }
+
+    // 3. Body
+    builder->SetInsertPoint(bodyBB);
+    visit_node(stmt->body);
+    builder->CreateBr(actionBB);
+
+    // 4. Action (Specialized for Ranges)
+    builder->SetInsertPoint(actionBB);
+
+    if (stmt->condition && stmt->condition->kind == ast_node_t::eRangeExpr) {
+      builder->CreateStore(
+          builder->CreateBinOp(
+              llvm::Instruction::Add, load(init->type, *init).value,
+              builder->getIntN(init->type->getIntegerBitWidth(), 1)),
+          init->value);
+    } else if (stmt->action) {
+        // Case: for i := 0; i < 10; i = i + 1 -> Manual action
+        visit_node(stmt->action);
+    }
+
+    builder->CreateBr(condBB);
+    builder->SetInsertPoint(mergeBB);
+
+    scopes.pop_back();
+    return nullptr;
+}
+
+SP<llvm_value_t>
 codegen_t::visit_node(SP<ast_node_t> node) {
   if (!node->type) {
     assert(false && "Internal Compiler Error: AST node has no type!");
   }
 
-  llvm_value_t *result = nullptr;
+  SP<llvm_value_t> result = nullptr;
   switch (node->kind) {
-  case ast_node_t::eExtern:
-    result = visit_extern(node);
+  case ast_node_t::eTypeAlias:
+    break;
+
+  case ast_node_t::eBinding:
+    result = visit_binding(node);
     break;
 
   case ast_node_t::eFunctionImpl:
@@ -808,15 +670,15 @@ codegen_t::visit_node(SP<ast_node_t> node) {
     break;
 
   case ast_node_t::eBlock:
-    visit_block(node);
-    break;
-
-  case ast_node_t::eReturn:
-    visit_return(node);
+    result = visit_block(node);
     break;
 
   case ast_node_t::eCall:
     result = visit_call(node);
+    break;
+
+  case ast_node_t::eAttribute:
+    result = visit_attribute(node);
     break;
 
   case ast_node_t::eLiteral:
@@ -831,64 +693,24 @@ codegen_t::visit_node(SP<ast_node_t> node) {
     result = visit_declaration(node);
     break;
 
-  case ast_node_t::eStructDecl:
-    result = visit_struct_definition(node);
+  case ast_node_t::eAddrOf:
+    result = visit_address_of(node);
     break;
 
   case ast_node_t::eBinop:
     result = visit_binop(node);
     break;
 
-  case ast_node_t::eCast:
-    result = visit_cast(node);
+  case ast_node_t::eArrayAccess:
+    result = visit_array_access(node);
     break;
 
-  case ast_node_t::eAssignment:
-    result = visit_assignment(node);
-    break;
-
-  case ast_node_t::eSelf:
-    result = scopes.back()->resolve("self");
-    break;
-
-  case ast_node_t::eAddrOf:
-    result = address_of(node);
-    break;
-
-  case ast_node_t::eMemberAccess:
-    result = visit_member_access(node);
-    break;
-
-  case ast_node_t::eAttribute:
-    result = visit_attribute(node);
-    break;
-
-  case ast_node_t::eDeref:
-    result = visit_deref(node);
-    break;
-
-  case ast_node_t::eNil:
-    result = visit_nil(node);
-    break;
-
-  case ast_node_t::eIf:
-    visit_if(node);
-    break;
+  // case ast_node_t::eWhile:
+  //   result = visit_while(node);
+  //   break;
 
   case ast_node_t::eFor:
-    visit_for(node);
-    break;
-
-  case ast_node_t::eWhile:
-    visit_while(node);
-    break;
-
-  case ast_node_t::eUnary:
-    result = visit_unary(node);
-    break;
-
-
-  case ast_node_t::eTypeAlias: // NO-OP
+    result = visit_for(node);
     break;
 
   default:

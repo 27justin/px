@@ -67,9 +67,13 @@ size_t alignment_of(SP<type_t> type) {
 }
 
 size_t size_of(const type_t &type) {
-  if (type.kind != type_kind_t::ePointer)
-    return type.size;
-  return sizeof(void*);
+  if (type.kind == type_kind_t::ePointer)
+    return sizeof(void*);
+
+  if (type.kind == type_kind_t::eArray)
+    return type.size * type.as.array->size;
+
+  return type.size;
 }
 
 size_t alignment_of(const type_t &type) {
@@ -153,7 +157,6 @@ pointer_t::deref() const {
   }
 }
 
-
 SP<type_t>
 type_t::make_slice(SP<type_t> base, bool is_mutable) {
   auto type = std::make_shared<type_t>();
@@ -166,6 +169,43 @@ type_t::make_slice(SP<type_t> base, bool is_mutable) {
 
   type->kind = type_kind_t::eSlice;
   type->as.slice = arr;
+  type->name = base->name;
+
+  return type;
+}
+
+SP<type_t>
+type_t::base_type() {
+  switch (kind) {
+  case type_kind_t::eArray:
+    return as.array->element_type;
+  case type_kind_t::eSlice:
+    return as.slice->element_type;
+  case type_kind_t::ePointer:
+    return as.pointer->deref();
+  default:
+    return nullptr;
+  }
+}
+
+SP<type_t>
+pointer_t::pointer_to(pointer_kind_t kind, SP<type_t> base, bool is_mutable) {
+  auto type = std::make_shared<type_t>();
+  type->size = sizeof(void*);
+  type->alignment = sizeof(void*);
+
+  pointer_t *ptr = new pointer_t {};
+  ptr->indirections = {kind};
+  ptr->is_mutable = is_mutable;
+  ptr->base = base;
+
+  if (base->kind == type_kind_t::ePointer) {
+    auto base_ptr = base->as.pointer;
+    ptr->indirections.insert(ptr->indirections.begin(), base_ptr->indirections.begin(), base_ptr->indirections.end());
+  }
+
+  type->kind = type_kind_t::ePointer;
+  type->as.pointer = ptr;
   type->name = base->name;
 
   return type;

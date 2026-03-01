@@ -1,3 +1,4 @@
+import libc
 import std.string
 import std.vector
 
@@ -14,7 +15,9 @@ std.vector<[]u8>.join := fn (!self, separator: []u8) -> std.string {
 
 main := fn () -> i32 {
   let v2: std.vector<[]u8> = std.vector<[]u8>.init();
-  v2.join("\n");
+  v2.push("Hello, world!");
+  v2.push("This is PX-Lang.");
+  libc.printf("%s\n", v2.join("\n"));
 
   0
 }

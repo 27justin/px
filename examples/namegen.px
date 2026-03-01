@@ -1,33 +1,35 @@
 CHARSET := "abcdefghijklmnopqrstuvwxyz"
 
-random := /*@(extern: "C", import: "rand")*/ fn () -> i32
-seed := /*@(extern: "C", import: "srand")*/ fn (_: u32)
-random_bytes := /*@(extern: "C", import: "getrandom")*/ fn (_: var !any, _: u64, _: u32) -> i64
-printf := /*@(extern: "C", import: "printf")*/ fn (_: !u8, ..)
+random := @(extern: "C", import: "rand") fn () -> i32
+seed := @(extern: "C", import: "srand") fn (_: u32)
+random_bytes := @(extern: "C", import: "getrandom") fn (_: var !any, _: u64, _: u32) -> i64
+printf := @(extern: "C", import: "printf") fn (_: !u8, ..)
 
 init_rand := fn () {
-  var sd: u32
-  random_bytes(&sd, sizeof(sd), 0)
-  seed(sd)
+  var sd: u32;
+  random_bytes(&sd, sizeof(sd), 0);
+  seed(sd);
 }
 
 random_character := fn () -> u8 {
-  let i := random() % sizeof(CHARSET)
+  let i: i32 = random() % sizeof(CHARSET);
   CHARSET[i]
 }
 
-main := fn () {
-  init_rand()
+main := fn () -> i32 {
+  init_rand();
 
-  let LENGTH := 4
-  let NUM_ATTEMPTS := 100
+  let LENGTH := 3;
+  let NUM_ATTEMPTS := 100;
 
   for 0..NUM_ATTEMPTS {
+    printf("%i. ", _);
     for 0..LENGTH {
-      printf("%c", random_character())
+      printf("%c", random_character());
     }
-    printf("\n")
+    printf("\n");
   }
+  0
 }
 
 

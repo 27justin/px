@@ -2,6 +2,7 @@
 
 #include "backend/analyzer.hpp"
 #include "backend/type.hpp"
+#include "frontend/ast.hpp"
 #include "llvm/IR/Instructions.h"
 #include <memory>
 
@@ -10,19 +11,22 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/Target/TargetMachine.h>
 
+#define VISITOR(name) SP<llvm_value_t> \
+    visit_##name(SP<ast_node_t> node)
 
 struct llvm_value_t {
   llvm::Value *value;
+  llvm::Type *type;
   bool is_rvalue;
 };
 
 struct llvm_scope_t {
-  std::map<std::string, llvm_value_t *> symbol_map;
+  std::map<std::string, SP<llvm_value_t>> symbol_map;
   SP<llvm_scope_t> parent;
 
   llvm_scope_t(SP<llvm_scope_t> parent) : parent(parent) {}
-  llvm_value_t *resolve(const std::string &);
-  llvm_value_t *add(const std::string &, const llvm_value_t &);
+  SP<llvm_value_t> resolve(const std::string &);
+  SP<llvm_value_t> set(const std::string &, const SP<llvm_value_t>);
 };
 
 struct codegen_t {
@@ -38,7 +42,8 @@ private:
   semantic_info_t info;
   std::map<SP<type_t>, llvm::Type *> llvm_type_cache;
   std::vector<SP<llvm_scope_t>> scopes;
-  bool extern_ = false;
+
+  SP<llvm_scope_t> scope();
 
   void init_target();
 
@@ -48,45 +53,37 @@ private:
   llvm::Value *get_address_of_node(SP<ast_node_t> node);
 
   llvm_value_t load(llvm::Type *type, const llvm_value_t &val);
-  llvm_value_t emit_store(llvm::Type *type, llvm::Value *value);
+  llvm_value_t load(SP<llvm_value_t> val);
+  llvm_value_t load(const llvm_value_t &val);
+
+  llvm_value_t cast(llvm::Type *type, const llvm_value_t &);
+
+  llvm::Instruction::BinaryOps map_binop_type(llvm::Type *, llvm::Type *, binop_type_t);
+  bool is_scalar_binop(binop_type_t);
 
   // ----------
   //   Visitors
   // ----------
-  llvm_value_t *address_of(SP<ast_node_t> node);
+  SP<llvm_value_t> address_of(SP<ast_node_t> node);
 
-  llvm_value_t *visit_node(SP<ast_node_t>);
-  llvm_value_t *visit_extern(SP<ast_node_t>);
-  llvm_value_t *visit_block(SP<ast_node_t>);
-
-  void visit_return(SP<ast_node_t>);
-  llvm_value_t *visit_literal(SP<ast_node_t>);
-  llvm_value_t *visit_call(SP<ast_node_t>);
-  llvm_value_t *visit_symbol(SP<ast_node_t>);
-
-  llvm_value_t *visit_declaration(SP<ast_node_t>);
-  llvm_value_t *visit_struct_definition(SP<ast_node_t>);
-
-  llvm_value_t *visit_binop(SP<ast_node_t>);
-  llvm_value_t *visit_cast(SP<ast_node_t>);
-  llvm_value_t *visit_assignment(SP<ast_node_t>);
-
-  llvm_value_t *visit_member_access(SP<ast_node_t>);
-
-  llvm_value_t *visit_attribute(SP<ast_node_t>);
-  llvm_value_t *visit_deref(SP<ast_node_t>);
-  llvm_value_t *visit_nil(SP<ast_node_t>);
-
-  void visit_if(SP<ast_node_t>);
-  void visit_for(SP<ast_node_t>);
-  void visit_while(SP<ast_node_t>);
-
-  llvm_value_t *visit_unary(SP<ast_node_t>);
-
-  llvm_value_t *visit_function_decl(SP<ast_node_t>);
-  llvm_value_t *visit_function_impl(SP<ast_node_t>);
-
-  llvm::Value *make_slice_from_array(SP<type_t> arr, llvm::Value *array_ptr);
+  VISITOR(node);
+  VISITOR(binding);
+  VISITOR(block);
+  VISITOR(call);
+  VISITOR(attribute);
+  VISITOR(literal);
+  VISITOR(symbol);
+  VISITOR(declaration);
+  VISITOR(address_of);
+  VISITOR(binop);
+  VISITOR(array_access);
+  VISITOR(while);
+  VISITOR(for);
+  VISITOR(function_decl);
+  VISITOR(function_impl);
 
   llvm::TargetMachine *target_machine;
+  std::optional<specialized_path_t> current_binding;
+
+  std::optional<std::string> external_name; // For FFI
 };

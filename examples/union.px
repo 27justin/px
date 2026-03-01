@@ -1,0 +1,15 @@
+import libc
+
+union_type := struct {
+  data: union {
+    a: i32
+    b: i64
+    c: [16]u8
+  }
+}
+
+main := fn () -> i32 {
+  libc.printf("%lli\n", sizeof(union_type));
+  0
+}
+
