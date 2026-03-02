@@ -494,6 +494,11 @@ void dump_ast(ast_node_t &node, size_t indent_val) {
     auto &impl = *node.as.fn_impl;
     std::cout << "[Function \n";
 
+    auto &decl = impl.declaration;
+    for (auto &param : decl.parameters) {
+      std::cout << indent() << "  " << (param.is_self ? "(self) " : "") << to_string(param.name) << ": " << to_string(param.type) << "\n";
+    }
+
     dump_ast(*impl.block, indent_val + 1);
 
     std::cout << "]\n";

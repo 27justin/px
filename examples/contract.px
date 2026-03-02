@@ -20,6 +20,19 @@ drawable := contract {
   draw := fn (!self, color: raylib.Color)
 }
 
+/*
+drawable.draw := fn (self: !any, color: raylib.Color) {
+  vtable = load_vtable(self);
+  data = load_data(self);
+  vtable.draw(data, color);
+}
+*/
+
+render := fn (object: drawable, color: raylib.Color) {
+  object.draw(color);
+  //drawable.draw(object, color);
+}
+
 circle := struct {
   radius: f32
   position: (x: i32, y: i32)
@@ -36,10 +49,6 @@ circle.draw := fn (!self, color: raylib.Color) {
 
 rectangle.draw := fn (!self, color: raylib.Color) {
   raylib.DrawRectangle(self.position.x, self.position.y, self.dim.0, self.dim.1, color)
-}
-
-render := fn (object: drawable, color: raylib.Color) {
-  object.draw(color);
 }
 
 WINDOW_WIDTH := 600
@@ -65,8 +74,10 @@ main := fn () -> i32 {
     raylib.BeginDrawing();
     raylib.ClearBackground(black);
 
-    circ.draw(red);
-    rect.draw(red);
+    //circ.draw(red);
+    //rect.draw(red);
+    render(circ as drawable, red);
+    render(rect as drawable, red);
 
     raylib.EndDrawing();
   }

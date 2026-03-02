@@ -71,6 +71,11 @@ private:
   SP<llvm_value_t> resolve_member(const llvm_value_t &, const std::string &);
   void link_external_symbol(const std::string &name, SP<type_t> type);
 
+  llvm::Value *decay_contract_to_data(llvm::Value *);
+  llvm::Value *decay_contract_to_vtable(llvm::Value *);
+  void contract_emit_dynamic_dispatcher(SP<type_t>, const std::string &, SP<type_t>);
+  llvm::Value *contract_emit_static_vtable(SP<type_t>, SP<type_t>);
+
   VISITOR(node);
   VISITOR(binding);
   VISITOR(block);

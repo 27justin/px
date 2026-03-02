@@ -223,7 +223,6 @@ SP<type_t> type_registry_t::self_placeholder(const specialized_path_t& owner_nam
   auto t = std::make_shared<type_t>();
   t->kind = eSelf;
   t->name = owner_name;
-  t->name.segments.push_back({"self"});
   return t;
 }
 

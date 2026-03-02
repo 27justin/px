@@ -167,6 +167,60 @@ codegen_t::generate() {
   }
 }
 
+void codegen_t::contract_emit_dynamic_dispatcher(SP<type_t> contract,
+                                                 const std::string &symbol_name,
+                                                 SP<type_t> requirement_type) {
+
+  auto llvm_type = ensure_type(requirement_type);
+  llvm::FunctionType *llvm_fn = llvm::dyn_cast<llvm::FunctionType>(llvm_type);
+
+  function_signature_t *signature = requirement_type->as.function;
+
+  specialized_path_t dispatcher_path {contract->name.segments};
+  dispatcher_path.segments.push_back(symbol_name);
+
+  auto func = llvm::Function::Create(llvm_fn, llvm::GlobalValue::ExternalLinkage, to_string(dispatcher_path), *module);
+
+  llvm::BasicBlock *entry = llvm::BasicBlock::Create(*context, "entry", func);
+
+  auto current_block = builder->GetInsertBlock();
+
+  builder->SetInsertPoint(entry);
+
+  // Dispatching a contract is done by:
+  //  1. Retrieving the vtable pointer
+  //  2. Retrieving the data pointer
+  //  3. Retrieve the correct offset for the symbol from the vtable
+  //  4. Call the retrieved function pointer with data + arguments
+  llvm::Value *contract_object = func->args().begin();
+
+  auto vtable = decay_contract_to_vtable(contract_object);
+  auto data = decay_contract_to_data(contract_object);
+
+  auto offset = std::distance(contract->as.contract->requirements.begin(), contract->as.contract->requirements.find(symbol_name));
+
+  // Load the `offset`-th pointer from the vtable
+  auto func_ptr = builder->CreateStructGEP(llvm::StructType::getTypeByName(*context, "contract." + to_string(contract->name)), vtable, offset, "method_ptr_addr");
+  auto dyn_func = builder->CreateLoad(llvm::PointerType::get(*context, 0), func_ptr, "method_ptr");
+
+  std::vector<llvm::Value*> args;
+  args.push_back(data);
+
+  for (auto it = func->args().begin() + 1; it != func->args().end(); ++it) {
+    args.push_back(it);
+  }
+
+  auto ret_val = builder->CreateCall(llvm_fn, dyn_func, args, llvm_fn->getReturnType()->isVoidTy() ? "" : "vtable_dispatch");
+
+  if (llvm_fn->getReturnType()->isVoidTy() == false)
+    builder->CreateRet(ret_val);
+  else
+    builder->CreateRetVoid();
+
+  scope()->set(to_string(dispatcher_path), std::make_shared<llvm_value_t>(func, llvm_fn, true));
+  builder->SetInsertPoint(current_block);
+}
+
 llvm::Type *codegen_t::ensure_type(SP<type_t> type) {
   if (type_llvm_cache.contains(type)) {
     return type_llvm_cache.at(type);
@@ -211,14 +265,34 @@ llvm::Type *codegen_t::ensure_type(SP<type_t> type) {
     break;
   }
   case type_kind_t::eContract: {
-    // Contracts are just two pointers.
-    // 1. For the vtable, this is another struct that holds the actual pointers to the functions.
-    //    The vtable is statically emitted, for every struct that gets casted to a contract, such a vtable will be created.
+    // Contracts consist of two different structs.
     //
-    // 2. For the data, this is just the pointer to the data the
-    // contract got created from. (Therefore has to stay in memory, be careful about stack memory!)
-    std::vector<llvm::Type *> types {llvm::PointerType::get(*context, 0), llvm::PointerType::get(*context, 0)};
-    llvm::StructType::create(types, to_string(type->name), true);
+    // First is the vtable struct, this holds the requirements of the contract.
+    //
+    // Second is the actual contract object, this is a 2 *
+    // pointer-size struct that holds both a pointer to the vtable,
+    // and a pointer to whatever implements the contract.
+
+    if (!llvm::StructType::getTypeByName(*context, "contract")) {
+      std::vector<llvm::Type *> types {llvm::PointerType::get(*context, 0), llvm::PointerType::get(*context, 0)};
+      llvm::StructType::create(types, "contract", true);
+    }
+
+    if (result = llvm::StructType::getTypeByName(*context, "contract." + to_string(type->name)); !result) {
+      std::vector<llvm::Type *> types;
+      auto ptr_type = llvm::PointerType::get(*context, 0);
+
+      for (auto &[name, req] : type->as.contract->requirements) {
+        types.push_back(ptr_type);
+      }
+
+      result = llvm::StructType::create(types, "contract." + to_string(type->name), true);
+
+      for (auto &[name, req] : type->as.contract->requirements) {
+        // Create dynamic dispatch function
+        contract_emit_dynamic_dispatcher(type, name, req);
+      }
+    }
     break;
   }
   case type_kind_t::eFunction: {
@@ -319,6 +393,22 @@ codegen_t::cast(llvm::Type *type, const llvm_value_t &value) {
   throw std::runtime_error ("Unhandled cast");
 }
 
+llvm::Value *
+codegen_t::decay_contract_to_data(llvm::Value *value) {
+  auto contract_type = llvm::StructType::getTypeByName(*context, "contract");
+
+  auto data_field_ptr = builder->CreateStructGEP(contract_type, value, 1, "data_field");
+  return builder->CreateLoad(llvm::PointerType::get(*context, 0), data_field_ptr, "data_ptr");
+}
+
+llvm::Value *
+codegen_t::decay_contract_to_vtable(llvm::Value *value) {
+  auto contract_type = llvm::StructType::getTypeByName(*context, "contract");
+
+  auto vtable_field_ptr = builder->CreateStructGEP(contract_type, value, 0, "vtable_field");
+  return builder->CreateLoad(llvm::PointerType::get(*context, 0), vtable_field_ptr, "vtable_ptr");
+}
+
 uint32_t
 codegen_t::field_index(llvm::Type *ty, const std::string &name) {
   auto type = llvm_type_cache.at(ty);
@@ -370,7 +460,7 @@ codegen_t::address_of(SP<ast_node_t> node) {
       path.segments.erase(path.segments.begin());
     }
 
-    assert(left->is_rvalue == false);
+    //assert(left->is_rvalue == false && left->type->isPointerTy() == false);
     return std::make_shared<llvm_value_t>(left->value, llvm::PointerType::get(*context, 0), true);
   }
   case ast_node_t::eDeref: {
@@ -497,7 +587,12 @@ VISITOR(call) {
 
   if (call->implicit_receiver) {
     auto receiver = visit_node(call->implicit_receiver);
-    args.insert(args.begin(), load(ensure_type(call->implicit_receiver->type), *receiver).value);
+    if (call->implicit_receiver->type->kind == type_kind_t::eContract) {
+      // Decay the contract into just the data pointer.
+      args.insert(args.begin(), visit_node(call->implicit_receiver)->value);
+    } else {
+      args.insert(args.begin(), load(ensure_type(call->implicit_receiver->type), *receiver).value);
+    }
   }
 
   auto callee = visit_node(call->callee);
@@ -606,6 +701,10 @@ codegen_t::resolve_member(const llvm_value_t &val, const std::string &member) {
     while (base_type->kind == type_kind_t::ePointer) {
       base_type = base_type->as.pointer->deref();
       base_ptr = builder->CreateLoad(ensure_type(base_type), base_ptr);
+    }
+
+    if (base_type->kind == type_kind_t::eContract) {
+      // Lookup the vtable for this thing.
     }
 
     llvm::Type *llvm_type = ensure_type(base_type);
@@ -1006,6 +1105,36 @@ VISITOR(assignment) {
   return std::make_shared<llvm_value_t>(load(left).value, left->type, true);
 }
 
+llvm::Value *codegen_t::contract_emit_static_vtable(SP<type_t> contract_ty, SP<type_t> implementor) {
+  auto static_variable_name = to_string(contract_ty->name) + "." + to_string(implementor->name) + ".vtable";
+
+  if (auto v = module->getGlobalVariable(static_variable_name)) {
+    return v;
+  }
+
+  auto vtable_ty = llvm::StructType::getTypeByName(*context, "contract." + to_string(contract_ty));
+  auto contract = contract_ty->as.contract;
+
+  std::vector<llvm::Constant *> elements;
+  for (auto it = contract->requirements.begin();
+       it != contract->requirements.end(); ++it) {
+    auto offset = std::distance(contract->requirements.begin(), it);
+    elements.push_back(llvm::dyn_cast<llvm::Function>(scope()->resolve(to_string(implementor) + "." + it->first)->value));
+  }
+
+  auto *vtable_init = llvm::ConstantStruct::getAnon(*context, elements);
+
+  // 2. It doesn't exist, so create it
+  return new llvm::GlobalVariable(
+    *module,
+    vtable_ty,
+    true,
+    llvm::GlobalValue::InternalLinkage,
+    vtable_init,
+    static_variable_name
+    );
+}
+
 VISITOR(cast) {
   cast_expr_t *expr = node->as.cast;
 
@@ -1015,6 +1144,27 @@ VISITOR(cast) {
   if (target_type->isIntegerTy() && value->type->isIntegerTy()) {
     // Int cast
     return std::make_shared<llvm_value_t>(builder->CreateIntCast(load(value).value, target_type, to_string(expr->type.name).substr(0, 1) == "i"), target_type, true);
+  }
+
+  if (node->type->kind == type_kind_t::eContract) {
+    // Create the contract object
+    auto generic_contract_type = llvm::StructType::getTypeByName(*context, "contract");
+    auto constrained_contract_type = llvm::StructType::getTypeByName(*context, "contract." + to_string(expr->value->type->name));
+
+    auto static_vtable = contract_emit_static_vtable(node->type, expr->value->type);
+
+    auto contract_ptr = builder->CreateAlloca(generic_contract_type, nullptr, "contract");
+
+    auto field_vtable_ptr = builder->CreateStructGEP(
+        generic_contract_type, contract_ptr, 0, "vtable_field");
+    auto field_data_ptr = builder->CreateStructGEP(generic_contract_type, contract_ptr, 1, "data_field");
+
+    builder->CreateStore(static_vtable, field_vtable_ptr);
+    builder->CreateStore(value->value, field_data_ptr);
+
+    // The resulting fat pointer is an rvalue, we can't load it, as
+    // that would instead load the vtable.
+    return std::make_shared<llvm_value_t>(contract_ptr, generic_contract_type, true);
   }
 
   return value;
