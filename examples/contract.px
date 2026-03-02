@@ -16,9 +16,9 @@ raylib.DrawCircle := @(extern: "C", import: "DrawCircle") fn (_: i32, _: i32, _:
 raylib.DrawRectangle := @(extern: "C", import: "DrawRectangle") fn (_: i32, _: i32, _: i32, _: i32, _: raylib.Color)
 /*--------------*/
 
-/*drawable := contract {
-  draw := fn (!self, color: (u8, u8, u8))
-}*/
+drawable := contract {
+  draw := fn (!self, color: raylib.Color)
+}
 
 circle := struct {
   radius: f32
@@ -36,6 +36,10 @@ circle.draw := fn (!self, color: raylib.Color) {
 
 rectangle.draw := fn (!self, color: raylib.Color) {
   raylib.DrawRectangle(self.position.x, self.position.y, self.dim.0, self.dim.1, color)
+}
+
+render := fn (object: drawable, color: raylib.Color) {
+  object.draw(color);
 }
 
 WINDOW_WIDTH := 600

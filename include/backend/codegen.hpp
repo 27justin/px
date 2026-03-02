@@ -88,6 +88,9 @@ private:
   VISITOR(enum);
   VISITOR(tuple);
   VISITOR(unary);
+  VISITOR(contract);
+  VISITOR(assignment);
+  VISITOR(cast);
   VISITOR(struct_initializer);
   VISITOR(function_decl);
   VISITOR(function_impl);

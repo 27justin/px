@@ -1,12 +1,22 @@
 fd := type distinct i32
 socket := type fd
 
-linux.accept    := /*@(extern: "C", import: "accept")    */ fn (_: socket, addr: var !any, addrlen: var !any)
-linux.socket    := /*@(extern: "C", import: "socket")    */ fn (domain: i32, ty: i32, protocol: i32) -> socket
-linux.bind      := /*@(extern: "C", import: "bind")      */ fn (_: socket, addr: !any, addrlen: /*u64*/i32)
-libc.read       := /*@(extern: "C", import: "read")      */ fn (_: fd, dest: var !u8, count: u64) -> i64
-linux.inet_pton := /*@(extern: "C", import: "inet_pton") */ fn (af: i32, src: []u8, dst: var !any) -> i32
-libc.printf     := /*@(extern: "C", import: "printf")    */ fn (_: !u8, ..)
+linux.accept    := @(extern: "C", import: "accept")     fn (_: socket, addr: var !any, addrlen: var !any) -> socket
+linux.socket    := @(extern: "C", import: "socket")     fn (domain: i32, ty: i32, protocol: i32) -> socket
+linux.bind      := @(extern: "C", import: "bind")       fn (_: socket, addr: !any, addrlen: u64) -> i32
+linux.listen    := @(extern: "C", import: "listen")     fn (_: socket, backlog: i32) -> i32
+linux.inet_pton := @(extern: "C", import: "inet_pton")  fn (af: i32, src: []u8, dst: var !any) -> i32
+
+libc.read       := @(extern: "C", import: "read")       fn (_: fd, dest: var !u8, count: u64) -> i64
+libc.write      := @(extern: "C", import: "write")      fn (_: fd, dest: !u8, count: u64) -> i64
+libc.printf     := @(extern: "C", import: "printf")     fn (_: !u8, ..)
+libc.perror     := @(extern: "C", import: "perror")     fn (_: !u8)
+
+libc.ntohl      := @(extern: "C", import: "ntohl")      fn (_: u32) -> u32
+libc.htonl      := @(extern: "C", import: "htonl")      fn (_: u32) -> u32
+
+libc.ntohs      := @(extern: "C", import: "ntohs")      fn (_: u16) -> u16
+libc.htons      := @(extern: "C", import: "htons")      fn (_: u16) -> u16
 
 sys.AF_UNSPEC      : i32 = 0 /* Unspecified.  */
 sys.AF_LOCAL       : i32 = 1 /* Local to host (pipes and file-domain).  */
@@ -67,24 +77,50 @@ sys.SOCK_DCCP := 6
 sys.SOCK_PACKET := 10
 
 linux.sockaddr := struct {
-  pad: [128]u8
+  ss_family: u16
+  __padding: [118]u8
+  __align: u64
 }
 
-main := fn (argc: i32) {
+linux.sockaddr_in4 := struct {
+  sin_family: u16,
+  sin_port: u16,
+  sin_addr: u32,
+  sin_zero: [8]u8
+}
+
+linux.sockaddr_in6 := struct {
+    sin6_family: u16,
+    sin6_port: u16,
+    sin6_flowinfo: u32,
+    sin6_addr: [16]u8,
+    sin6_scope_id: u32
+}
+
+response := "HTTP/1.1 418\r\nConnection: close\r\nServer: px-example\r\nContent-Length: 13\r\n\r\nHello, world!"
+
+main := fn (argc: i32) -> i32 {
   let socket := linux.socket(sys.AF_INET, sys.SOCK_STREAM, 0);
 
-  var address: linux.sockaddr;
-  linux.inet_pton(sys.AF_INET, "127.0.0.1", &address);
-  linux.bind(socket, &address, 4);
+  var address: linux.sockaddr_in4;
+  address.sin_family = sys.AF_INET as u16;
+  address.sin_port = libc.htons(38495);
+
+  linux.inet_pton(sys.AF_INET, "127.0.0.1", &address.sin_addr);
+  linux.bind(socket, &address, sizeof(address));
+  linux.listen(socket, 10);
 
   var data: [4096]u8;
   while true {
     var clientaddr_len: u64;
     var clientaddr: linux.sockaddr;
     let client := linux.accept(socket, &clientaddr, &clientaddr_len);
+    libc.printf("Client: %i\n", client);
 
-    let bytes := libc.read(socket, data, 4096);
+    let bytes := libc.read(client, data, 4096);
     libc.printf("Read %lli bytes\n", bytes);
+    libc.write(client, response, sizeof(response));
   }
+  0
 }
 

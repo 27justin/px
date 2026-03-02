@@ -699,10 +699,18 @@ A::is_mutable(N node) {
   switch (node->kind) {
   case ast_node_t::eSymbol: {
     symbol_expr_t *expr = node->as.symbol;
-    auto symbol = scope().resolve(expr->path);
-    if (!symbol)
-      return false;
 
+    auto symbol = scope().resolve(expr->path);
+    if (!symbol) {
+      // Try to lookup the first segment.
+      //
+      // TODO: This is a very crude "detection" of mutability for
+      // structs, in such that it doesn't work.
+      std::vector<specialized_segment_t> path = {expr->path.segments.front()};
+      if (symbol = scope().resolve(path); !symbol) {
+        return false;
+      }
+    }
     return symbol->is_mutable;
   }
   default:
@@ -1039,7 +1047,6 @@ QT A::resolve_receiver(std::optional<specialized_path_t> path_opt) {
 QT
 A::analyze_addr_of(N node) {
   addr_of_expr_t *addr_of = node->as.addr_of;
-
 
   if (!is_lvalue(addr_of->value)) {
     diagnostics.messages.push_back(error(node->source, addr_of->value->location, "Taking address of temporary", "This expression is temporary, taking the address of this is not allowed."));

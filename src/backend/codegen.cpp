@@ -13,6 +13,7 @@
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 
+#include <cassert>
 #include <filesystem>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Target/TargetMachine.h>
@@ -209,6 +210,17 @@ llvm::Type *codegen_t::ensure_type(SP<type_t> type) {
     result = llvm::StructType::create(types, to_string(type->name), true);
     break;
   }
+  case type_kind_t::eContract: {
+    // Contracts are just two pointers.
+    // 1. For the vtable, this is another struct that holds the actual pointers to the functions.
+    //    The vtable is statically emitted, for every struct that gets casted to a contract, such a vtable will be created.
+    //
+    // 2. For the data, this is just the pointer to the data the
+    // contract got created from. (Therefore has to stay in memory, be careful about stack memory!)
+    std::vector<llvm::Type *> types {llvm::PointerType::get(*context, 0), llvm::PointerType::get(*context, 0)};
+    llvm::StructType::create(types, to_string(type->name), true);
+    break;
+  }
   case type_kind_t::eFunction: {
     auto fn = type->as.function;
     llvm::Type* ret_ty = ensure_type(fn->return_type);
@@ -336,11 +348,30 @@ codegen_t::address_of(SP<ast_node_t> node) {
   addr_of_expr_t *expr = node->as.addr_of;
   switch (expr->value->kind) {
   case ast_node_t::eSymbol: {
-    auto id = to_string(expr->value->as.symbol->path);
-    // The result of an address of is an rvalue (don't need to load,
-    // that would be a deref.)
-    auto val = scopes.back()->resolve(id);
-    return std::make_shared<llvm_value_t>(val->value, val->type, true);
+    auto path = expr->value->as.symbol->path;
+    SP<llvm_value_t> left {nullptr};
+
+    specialized_segment_t segment = path.segments.front();
+    left = scope()->resolve(segment.name);
+    // Erase first segment
+    path.segments.erase(path.segments.begin());
+
+    while (left && path.segments.size() > 0) {
+      // Get next one.
+      segment = path.segments.front();
+
+      auto member = resolve_member(*left, segment.name);
+      if (member == nullptr) {
+        // If we couldn't resolve this segment, it might be a UFCS function.
+        break;
+      }
+
+      left = member;
+      path.segments.erase(path.segments.begin());
+    }
+
+    assert(left->is_rvalue == false);
+    return std::make_shared<llvm_value_t>(left->value, llvm::PointerType::get(*context, 0), true);
   }
   case ast_node_t::eDeref: {
     auto result = visit_node(node->as.deref_expr->value);
@@ -959,6 +990,36 @@ VISITOR(unary) {
   return value;
 }
 
+VISITOR(contract) {
+  contract_decl_t *decl = node->as.contract_decl;
+  ensure_type(node->type);
+  return nullptr;
+}
+
+VISITOR(assignment) {
+  assign_expr_t *expr = node->as.assign_expr;
+
+  auto left = visit_node(expr->where);
+  auto right = visit_node(expr->value);
+
+  builder->CreateStore(load(right).value, left->value);
+  return std::make_shared<llvm_value_t>(load(left).value, left->type, true);
+}
+
+VISITOR(cast) {
+  cast_expr_t *expr = node->as.cast;
+
+  auto value = visit_node(expr->value);
+  llvm::Type *target_type = ensure_type(node->type);
+
+  if (target_type->isIntegerTy() && value->type->isIntegerTy()) {
+    // Int cast
+    return std::make_shared<llvm_value_t>(builder->CreateIntCast(load(value).value, target_type, to_string(expr->type.name).substr(0, 1) == "i"), target_type, true);
+  }
+
+  return value;
+}
+
 SP<llvm_value_t>
 codegen_t::visit_node(SP<ast_node_t> node) {
   if (!node->type) {
@@ -1044,6 +1105,18 @@ codegen_t::visit_node(SP<ast_node_t> node) {
 
   case ast_node_t::eUnary:
     result = visit_unary(node);
+    break;
+
+  case ast_node_t::eContract:
+    result = visit_contract(node);
+    break;
+
+  case ast_node_t::eAssignment:
+    result = visit_assignment(node);
+    break;
+
+  case ast_node_t::eCast:
+    result = visit_cast(node);
     break;
 
   default:
