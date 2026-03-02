@@ -26,6 +26,10 @@ void A::import_source_file(const std::string &path) {
 
     semantic_info_t info = analyzer.analyze(parser.parse());
     scope_stack.front()->merge(*info.scope);
+
+    for (auto &[symbol, ty] : info.scope->symbol_map()) {
+      this->info->imported_symbols[symbol] = ty->type;
+    }
   } catch (const analyze_error_t &err) {
     for (auto &msg : err.diagnostics.messages) {
       std::cerr << serialize(msg) << "\n";
@@ -40,14 +44,14 @@ void A::import_source_file(const std::string &path) {
 semantic_info_t
 A::analyze(translation_unit_t tu) {
   push_scope();
-  semantic_info_t info {
-    .unit = tu,
-    .scope = scope_stack.front()
-  };
+  info = std::make_unique<semantic_info_t>(semantic_info_t {
+      .unit = tu,
+      .scope = scope_stack.front()
+    });
 
   // First resolve all imports
   std::vector<std::string> import_search_paths {"../lib"};
-  for (auto &import_ : info.unit.imports) {
+  for (auto &import_ : info->unit.imports) {
     bool found = false;
     for (auto &search_path : import_search_paths) {
       auto relative_disk_path = to_string(import_);
@@ -72,9 +76,16 @@ A::analyze(translation_unit_t tu) {
   }
 
   // Then process our source file
-  for (auto &decl : info.unit.declarations) {
+  for (auto it = info->unit.declarations.begin(); it != info->unit.declarations.end();) {
+    auto &decl = *it;
     try {
       analyze_node(decl);
+
+      if (!decl) {
+        it = info->unit.declarations.erase(it);
+      } else {
+        ++it;
+      }
     } catch (const diagnostic_t &msg) {
       diagnostics.messages.push_back(msg);
     }
@@ -84,7 +95,7 @@ A::analyze(translation_unit_t tu) {
   if (diagnostics.messages.size() > 0) {
     throw analyze_error_t {std::move(diagnostics)};
   }
-  return info;
+  return *info;
 }
 
 scope_t &
@@ -142,10 +153,10 @@ A::resolve_type(const type_decl_t &ty) {
     // Might be a tuple.
     if (ty.tuple) {
       // Tuples are not non-named composite types
-      std::unordered_map<std::string, QT> tuple_types;
+      std::vector<std::pair<std::string, QT>> tuple_types;
       int64_t nmemb = 0;
       for (auto &[k, v] : ty.tuple->elements) {
-        tuple_types[k.value_or(std::to_string(nmemb))] = ensure_concrete(resolve_type(v));
+        tuple_types.emplace_back(k.value_or(std::to_string(nmemb)), ensure_concrete(resolve_type(v)));
         nmemb++;
       }
       return scope().types.tuple_of(tuple_types);
@@ -338,6 +349,11 @@ A::is_static_dispatch(N node) {
   return scope().resolve(call->callee->as.symbol->path) != nullptr;
 }
 
+bool
+A::is_dynamic_dispatch(N node) {
+  return !is_static_dispatch(node);
+}
+
 value_category_t A::resolve_value_category(N node) {
   switch (node->kind) {
   case ast_node_t::eSymbol:       return value_category_t::eLValue;
@@ -407,6 +423,25 @@ A::analyze_call(N node) {
       diagnostics.messages.push_back(error(call->arguments[i]->source, call->arguments[i]->location, "Invalid type", fmt("Expected {}, got {} for argument #{}", to_string(param), to_string(arg_type), i)));
       throw analyze_error_t{diagnostics};
     }
+  }
+
+  if (is_dynamic_dispatch(node) && has_receiver) {
+    // Rewrite the callee symbol, to point the static symbol.
+    auto member_function = call->callee->as.symbol->path.segments.back();
+
+    std::vector<specialized_segment_t> path = { member_function };
+    path.insert(path.begin(), signature->receiver->name.segments.begin(), signature->receiver->name.segments.end());
+
+    call->implicit_receiver = make_node<symbol_expr_t>(ast_node_t::eSymbol, {specialized_path_t{call->callee->as.symbol->path.segments.front().name}}, node->location, node->source);
+
+    if (signature->receiver->kind == type_kind_t::ePointer) {
+      call->implicit_receiver = make_node<addr_of_expr_t>(ast_node_t::eAddrOf, {call->implicit_receiver}, node->location, node->source);
+    }
+
+    analyze_node(call->implicit_receiver);
+
+    call->callee = make_node<symbol_expr_t>(ast_node_t::eSymbol, {path}, node->location, node->source);
+    analyze_node(call->callee);
   }
 
   // The remaining arguments (for variadic functions), can't be type
@@ -510,11 +545,12 @@ A::analyze_declaration(N node) {
 
 QT
 A::resolve_tuple_element(QT tuple, const std::string &member_name) {
-  if (!tuple->as.tuple->elements.contains(member_name)) {
+  auto tuple_layout = tuple->as.tuple;
+  if (tuple_layout->element(member_name) == tuple_layout->elements.end()) {
     diagnostics.messages.push_back(error(source, {{0,0},{0,0}}, "Invalid tuple element", fmt("Tuple element {} is unknown", member_name)));
     throw analyze_error_t {diagnostics};
   }
-  return tuple->as.tuple->elements.at(member_name);
+  return tuple_layout->element(member_name)->second;
 }
 
 QT
@@ -727,7 +763,24 @@ A::analyze_struct_expr(N node) {
   else
     struct_type = type_hint();
 
-  // TODO: Check members...
+  if (!struct_type) {
+    diagnostics.messages.push_back(error(source, node->location, "Unknown struct type", fmt("Type doesn't exist")));
+    throw analyze_error_t{diagnostics};
+  }
+
+  if (struct_type->kind != type_kind_t::eStruct) {
+    diagnostics.messages.push_back(error(source, node->location, "Invalid type", fmt("This type is not a struct")));
+    throw analyze_error_t{diagnostics};
+  }
+
+  auto layout = struct_type->as.struct_layout;
+  for (auto &[member_name, value] : expr->values) {
+    if (layout->member(member_name) == nullptr) {
+      diagnostics.messages.push_back(error(source, node->location, "Unknown member", fmt("Member {} doesn't exist on this struct.", member_name)));
+      throw analyze_error_t{diagnostics};
+    }
+    analyze_node(value);
+  }
   return struct_type;
 }
 
@@ -1045,11 +1098,15 @@ A::monomorphize(SP<template_decl_t> template_, specialized_path_t instantiation)
     scope().types.add_template_alias(template_binding.binding, resolve_type(*type));
   }
 
-  // // Analyze the body (returns a type involving 'T')
-  QT abstract_type = analyze_node(template_->value);
+  N tree = std::make_shared<ast_node_t>(*template_->value);
+
+  // Analyze the body (returns a type involving 'T')
+  QT abstract_type = analyze_node(tree);
 
   pop_scope();
   current_binding = old_binding;
+
+  info->template_instantiations.emplace(instantiation, tree);
   return abstract_type;
 }
 
@@ -1359,19 +1416,50 @@ A::analyze_attribute(N node) {
 QT
 A::analyze_tuple(N node) {
   tuple_expr_t *expr = node->as.tuple_expr;
+  QT hinted_type = type_hint();
 
-  auto hinted_type = type_hint();
-  std::unordered_map<std::string, QT> resolved_tuple;
-  uint64_t nmemb = 0;
-  for (auto &[k, v] : expr->elements) {
-    if (k.has_value()) {
-      resolved_tuple[*k] = analyze_node(v);
-    } else {
-      resolved_tuple[std::to_string(nmemb++)] = ensure_concrete(analyze_node(v));
+  std::vector<QT> positional_hints;
+  std::unordered_map<std::string, QT> named_hints;
+
+  if (hinted_type && hinted_type->kind == type_kind_t::eTuple) {
+    auto tuple_hint = hinted_type->as.tuple;
+    for (auto const& [name, type] : tuple_hint->elements) {
+      if (std::isdigit(name[0])) {
+        positional_hints.push_back(type);
+      } else {
+        named_hints[name] = type;
+      }
     }
   }
 
-  return scope().types.tuple_of(resolved_tuple);
+  std::vector<std::pair<std::string, QT>> resolved_elements;
+  uint64_t positional_idx = 0;
+
+  for (auto &[key, value_node] : expr->elements) {
+    QT current_hint = nullptr;
+    std::string element_key;
+
+    if (key.has_value()) {
+      element_key = *key;
+      if (named_hints.count(element_key)) {
+        current_hint = named_hints[element_key];
+      }
+    } else {
+      element_key = std::to_string(positional_idx);
+      if (positional_idx < positional_hints.size()) {
+        current_hint = positional_hints[positional_idx];
+      }
+      positional_idx++;
+    }
+
+    if (current_hint) push_type_hint(current_hint);
+    QT resolved_type = ensure_concrete(analyze_node(value_node));
+    if (current_hint) pop_type_hint();
+
+    resolved_elements.emplace_back(element_key, resolved_type);
+  }
+
+  return scope().types.tuple_of(resolved_elements);
 }
 
 QT
@@ -1393,13 +1481,34 @@ A::analyze_zero(N) {
 }
 
 QT
-A::analyze_node(N node) {
+A::analyze_unary(N node) {
+  return analyze_node(node->as.unary->value);
+}
+
+N A::expand(const std::string &source) {
+  auto src = std::make_shared<source_t>("expansion", source);
+  lexer_t lexer(src);
+  parser_t parser(lexer, src);
+  analyzer_t subanalyzer (src);
+  auto info = subanalyzer.analyze(parser.parse());
+  return info.unit.declarations[0];
+}
+
+QT
+A::analyze_node(N &node) {
   QT type {};
 
   switch (node->kind) {
   case ast_node_t::eTemplate:
   case ast_node_t::eBinding:
     type = analyze_binding(node);
+
+    if (node->kind == ast_node_t::eTemplate) {
+      // Templates are "reset" here, which removes them from the AST
+      // tree, as they are instantiated on the fly.
+      node.reset();
+    }
+
     break;
 
   case ast_node_t::eFunctionDecl:
@@ -1538,10 +1647,16 @@ A::analyze_node(N node) {
     type = analyze_zero(node);
     break;
 
+  case ast_node_t::eUnary:
+    type = analyze_unary(node);
+    break;
+
   default:
     assert(false && "Unhandled AST node in analyzer");
   }
 
-  node->type = ensure_concrete(type);
+  if (type)
+    node->type = ensure_concrete(type);
   return type;
 }
+

@@ -1,19 +1,7 @@
-import std.io
-
-write_something := fn (writer: std.io.writer) {
-  writer.write_bytes("Hello! I don't care what `writer` is, it just has to have `write_bytes`!");
-}
-
-read_something := fn (reader: std.io.reader) {
-  var data: [128]u8;
-  reader.read_bytes(data);
-}
-
+import libc
 
 main := fn () {
-  let file := std.io.file.open("hello.txt", "w");
-  write_something(file as std.io.writer);
-  read_something(file as std.io.reader);
+  let str := "Hello, world!\n";
+  let file := libc.fopen("test.txt", "w+");
+  file.write("Hello, world!\n", 14);
 }
-
-

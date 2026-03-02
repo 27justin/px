@@ -63,7 +63,10 @@ struct slice_t {
 };
 
 struct tuple_t {
-  std::unordered_map<std::string, SP<type_t>> elements;
+  std::vector<std::pair<std::string, SP<type_t>>> elements;
+
+  std::vector<std::pair<std::string, SP<type_t>>>::const_iterator
+  element(const std::string &name) const;
 };
 
 struct function_signature_t {

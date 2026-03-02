@@ -120,7 +120,7 @@ int get_unary_binding_power(TT type) {
   case TT::operatorDot:
   case TT::operatorXor:
   case TT::operatorExclamation:
-    return 90;
+    return 75;
   case TT::operatorAnd:
     return 81;
   default:
@@ -255,7 +255,7 @@ P::parse_template_path() {
 specialized_path_t
 P::parse_specialized_path() {
   specialized_path_t path;
-  while (is_keyword(lexer.peek().type) || is_identifier(lexer.peek().type)) {
+  while (is_keyword(lexer.peek().type) || is_identifier(lexer.peek().type) || lexer.peek().type == token_type_t::literalInt) {
     token = lexer.next();
     specialized_segment_t segment {};
 

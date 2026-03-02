@@ -1,0 +1,71 @@
+import libc
+
+/*    RAYLIB    */
+raylib.Color := type (u8, u8, u8, u8)
+
+raylib.InitWindow := @(extern: "C", import: "InitWindow") fn (w: i32, h: i32, title: !u8)
+raylib.CloseWindow := @(extern: "C", import: "CloseWindow") fn ()
+raylib.WindowShouldClose := @(extern: "C", import: "WindowShouldClose") fn () -> bool
+
+raylib.ClearBackground := @(extern: "C", import: "ClearBackground") fn (_: raylib.Color)
+
+raylib.BeginDrawing := @(extern: "C", import: "BeginDrawing") fn ()
+raylib.EndDrawing := @(extern: "C", import: "EndDrawing") fn ()
+
+raylib.DrawCircle := @(extern: "C", import: "DrawCircle") fn (_: i32, _: i32, _: f32, _: raylib.Color)
+raylib.DrawRectangle := @(extern: "C", import: "DrawRectangle") fn (_: i32, _: i32, _: i32, _: i32, _: raylib.Color)
+/*--------------*/
+
+/*drawable := contract {
+  draw := fn (!self, color: (u8, u8, u8))
+}*/
+
+circle := struct {
+  radius: f32
+  position: (x: i32, y: i32)
+}
+
+rectangle := struct {
+  dim: (i32, i32)
+  position: (x: i32, y: i32)
+}
+
+circle.draw := fn (!self, color: raylib.Color) {
+  raylib.DrawCircle(self.position.x, self.position.y, self.radius, color)
+}
+
+rectangle.draw := fn (!self, color: raylib.Color) {
+  raylib.DrawRectangle(self.position.x, self.position.y, self.dim.0, self.dim.1, color)
+}
+
+WINDOW_WIDTH := 600
+WINDOW_HEIGHT := 400
+
+main := fn () -> i32 {
+  raylib.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "px contract example");
+
+  let circ := circle {
+    radius: 25.0
+    position: (x: WINDOW_WIDTH / 2, y: 25)
+  };
+
+  let rect := rectangle {
+    dim: (100, 50)
+    position: (x: WINDOW_WIDTH / 2 - 50, y: 50)
+  };
+
+  let red: (u8, u8, u8, u8) = (255, 0, 0, 255);
+  let black: (u8, u8, u8, u8) = (0, 0, 0, 255);
+
+  while !raylib.WindowShouldClose() {
+    raylib.BeginDrawing();
+    raylib.ClearBackground(black);
+
+    circ.draw(red);
+    rect.draw(red);
+
+    raylib.EndDrawing();
+  }
+  0
+}
+

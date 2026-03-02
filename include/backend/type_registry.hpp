@@ -25,7 +25,7 @@ struct type_registry_t {
   SP<type_t> array_of(SP<type_t> base, size_t len);
   SP<type_t> slice_of(SP<type_t> base, bool is_mutable);
   SP<type_t> self_placeholder(const specialized_path_t &name);
-  SP<type_t> tuple_of(const std::unordered_map<std::string, SP<type_t>> &elements);
+  SP<type_t> tuple_of(const std::vector<std::pair<std::string, SP<type_t>>> &elements);
   SP<type_t> union_of(const std::map<std::string, SP<type_t>> &union_types);
   SP<type_t> add_template_alias(const specialized_path_t &name, SP<type_t>);
 

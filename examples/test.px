@@ -1,7 +1,6 @@
-libc.printf := @(extern: "C", import: "printf") fn (_: !u8, ..)
+import libc
 
-main := fn ()  {
-  let i: i32 = uninitialized;
-  libc.printf("Hey, you're %s! (%i)\n", "back", i);
+main := fn () {
+  let file := libc.fopen("test.txt", "w+");
+  file.write("Hello, hell !\n", 14);
 }
-

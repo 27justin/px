@@ -74,11 +74,61 @@ struct enum_decl_t;
 
 enum class literal_type_t {eString, eInteger, eFloat, eBool};
 
+#define LIST_OF_AST_TYPES \
+  X(eInvalid)                \
+  X(eType)                   \
+  X(eDeclaration)            \
+  X(eBinop)                  \
+  X(eUnary)                  \
+  X(eSymbol)                 \
+  X(eStructDecl)             \
+  X(eBlock)                  \
+  X(eFunctionDecl)           \
+  X(eFunctionImpl)           \
+  X(eExtern)                 \
+  X(eReturn)                 \
+  X(eCall)                   \
+  X(eLiteral)                \
+  X(eSelf)                   \
+  X(eMemberAccess)           \
+  X(eAddrOf)                 \
+  X(eFunctionParameter)      \
+  X(eIf)                     \
+  X(eTypeAlias)              \
+  X(eCast)                   \
+  X(eAssignment)             \
+  X(eDeref)                  \
+  X(eNil)                    \
+  X(eAttribute)              \
+  X(eFor)                    \
+  X(eWhile)                  \
+  X(eBinding)                \
+  X(eStructExpr)             \
+  X(eRangeExpr)              \
+  X(eContract)               \
+  X(eDefer)                  \
+  X(eMove)                   \
+  X(eTemplate)               \
+  X(eArrayAccess)            \
+  X(eSizeOf)                 \
+  X(eSliceExpr)              \
+  X(eArrayInitializeExpr)    \
+  X(eTupleExpr)              \
+  X(eEnumDecl)               \
+  X(eZero)                   \
+  X(eUninitialized)
+
 struct ast_node_t {
   ~ast_node_t();
+  ast_node_t(const ast_node_t &);
+  ast_node_t() = default;
   void reset();
 
-  enum kind_t { eInvalid, eType, eDeclaration, eBinop, eUnary, eSymbol, eStructDecl, eBlock, eFunctionDecl, eFunctionImpl, eExtern, eReturn, eCall, eLiteral, eSelf, eMemberAccess, eAddrOf, eFunctionParameter, eIf, eTypeAlias, eCast, eAssignment, eDeref, eNil, eAttribute, eFor, eWhile, eBinding, eStructExpr, eRangeExpr, eContract, eDefer, eMove, eTemplate, eArrayAccess, eSizeOf, eSliceExpr, eArrayInitializeExpr, eTupleExpr, eEnumDecl, eZero, eUninitialized } kind;
+  enum kind_t {
+#define X(name) name,
+    LIST_OF_AST_TYPES
+#undef X
+  } kind;
   struct {
     union {
       type_decl_t *type;

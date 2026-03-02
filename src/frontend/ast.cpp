@@ -16,6 +16,187 @@ SP<ast_node_t> make_node(ast_node_t::kind_t kind, source_location_t loc, SP<sour
   return node;
 }
 
+ast_node_t::ast_node_t(const ast_node_t &other) {
+  this->kind = other.kind;
+  this->location = other.location;
+  this->as.raw = nullptr;
+  this->source = other.source;
+
+#define CLONE_CASE(kind_name, member_name, type_name) \
+    case kind_name: \
+        this->as.member_name = new type_name(*other.as.member_name); \
+        break;
+
+  switch (kind) {
+    CLONE_CASE(eType, type, type_decl_t);
+    CLONE_CASE(eDeclaration, declaration, declaration_t);
+    CLONE_CASE(eBinop, binop, binop_expr_t);
+    CLONE_CASE(eUnary, unary, unary_expr_t);
+    CLONE_CASE(eSymbol, symbol, symbol_expr_t);
+    CLONE_CASE(eStructDecl, struct_decl, struct_decl_t);
+    CLONE_CASE(eBlock, block, block_node_t);
+    CLONE_CASE(eFunctionDecl, fn_decl, function_decl_t);
+    CLONE_CASE(eFunctionImpl, fn_impl, function_impl_t);
+    CLONE_CASE(eFunctionParameter, fn_param, function_parameter_t);
+    CLONE_CASE(eReturn, return_stmt, return_stmt_t);
+    CLONE_CASE(eCall, call_expr, call_expr_t);
+    CLONE_CASE(eLiteral, literal_expr, literal_expr_t);
+    CLONE_CASE(eMemberAccess, member_access, member_access_expr_t);
+    CLONE_CASE(eAddrOf, addr_of, addr_of_expr_t);
+    CLONE_CASE(eIf, if_stmt, if_stmt_t);
+    CLONE_CASE(eTypeAlias, alias_decl, type_alias_decl_t);
+    CLONE_CASE(eCast, cast, cast_expr_t);
+    CLONE_CASE(eAssignment, assign_expr, assign_expr_t);
+    CLONE_CASE(eDeref, deref_expr, deref_expr_t);
+    CLONE_CASE(eAttribute, attribute_decl, attribute_decl_t);
+    CLONE_CASE(eFor, for_stmt, for_stmt_t);
+    CLONE_CASE(eWhile, while_stmt, while_stmt_t);
+    CLONE_CASE(eBinding, binding_decl, binding_decl_t);
+    CLONE_CASE(eStructExpr, struct_expr, struct_expr_t);
+    CLONE_CASE(eRangeExpr, range_expr, range_expr_t);
+    CLONE_CASE(eContract, contract_decl, contract_decl_t);
+    CLONE_CASE(eDefer, defer_expr, defer_expr_t);
+    CLONE_CASE(eMove, move_expr, move_expr_t);
+    CLONE_CASE(eTemplate, template_decl, template_decl_t);
+    CLONE_CASE(eArrayAccess, array_access_expr, array_access_expr_t);
+    CLONE_CASE(eSizeOf, sizeof_expr, sizeof_expr_t);
+    CLONE_CASE(eSliceExpr, slice_expr, slice_expr_t);
+    CLONE_CASE(eArrayInitializeExpr, array_initialize_expr, array_initialize_expr_t);
+    CLONE_CASE(eTupleExpr, tuple_expr, tuple_expr_t);
+    CLONE_CASE(eEnumDecl, enum_decl, enum_decl_t);
+  case eSelf:
+  case eInvalid:
+  case eZero:
+  case eUninitialized:
+  case eNil:
+    break;
+  default:
+    throw std::runtime_error("Unhandled clone case!");
+  }
+
+  switch (kind) {
+  case eType:
+    as.type->len = std::make_shared<ast_node_t>(*other.as.type->len);
+    break;
+  case eContract:
+    as.contract_decl->requirements.clear();
+    for (auto &req : other.as.contract_decl->requirements) {
+      as.contract_decl->requirements.emplace_back(std::make_shared<ast_node_t>(*req));
+    }
+    break;
+  case eDeclaration:
+    as.declaration->value = std::make_shared<ast_node_t>(*other.as.declaration->value);
+    break;
+  case eBinop:
+    as.binop->left = std::make_shared<ast_node_t>(*other.as.binop->left);
+    as.binop->right = std::make_shared<ast_node_t>(*other.as.binop->right);
+    break;
+  case eUnary:
+    as.unary->value = std::make_shared<ast_node_t>(*other.as.unary->value);
+    break;
+  case eBlock:
+    as.block->body.clear();
+    for (auto &req : other.as.block->body) {
+      as.block->body.emplace_back(std::make_shared<ast_node_t>(*req));
+    }
+    break;
+  case eBinding:
+    as.binding_decl->value = std::make_shared<ast_node_t>(*other.as.binding_decl->value);
+    break;
+  case eTemplate:
+    as.template_decl->value = std::make_shared<ast_node_t>(*other.as.template_decl->value);
+    break;
+  case eFunctionImpl:
+    as.fn_impl->block = std::make_shared<ast_node_t>(*other.as.fn_impl->block);
+    break;
+  case eReturn:
+    as.return_stmt->value = std::make_shared<ast_node_t>(*other.as.return_stmt->value);
+    break;
+  case eCall:
+    as.call_expr->callee = std::make_shared<ast_node_t>(*other.as.call_expr->callee);
+    if (other.as.call_expr->implicit_receiver)
+      as.call_expr->implicit_receiver = std::make_shared<ast_node_t>(*other.as.call_expr->implicit_receiver);
+    as.call_expr->arguments.clear();
+    for (auto &req : other.as.call_expr->arguments) {
+      as.call_expr->arguments.emplace_back(std::make_shared<ast_node_t>(*req));
+    }
+    break;
+  case eMemberAccess:
+    as.member_access->object = std::make_shared<ast_node_t>(*other.as.member_access->object);
+    break;
+  case eAddrOf:
+    as.addr_of->value = std::make_shared<ast_node_t>(*other.as.addr_of->value);
+    break;
+  case eIf:
+    as.if_stmt->condition = std::make_shared<ast_node_t>(*other.as.if_stmt->condition);
+    as.if_stmt->pass = std::make_shared<ast_node_t>(*other.as.if_stmt->pass);
+    as.if_stmt->reject = std::make_shared<ast_node_t>(*other.as.if_stmt->reject);
+    break;
+  case eCast:
+    as.cast->value = std::make_shared<ast_node_t>(*other.as.cast->value);
+    break;
+  case eAssignment:
+    as.assign_expr->where = std::make_shared<ast_node_t>(*other.as.assign_expr->where);
+    as.assign_expr->value = std::make_shared<ast_node_t>(*other.as.assign_expr->value);
+    break;
+  case eDeref:
+    as.deref_expr->value = std::make_shared<ast_node_t>(*other.as.deref_expr->value);
+    break;
+  case eAttribute:
+    as.attribute_decl->affect = std::make_shared<ast_node_t>(*other.as.attribute_decl->affect);
+    break;
+  case eFor:
+    as.for_stmt->init = std::make_shared<ast_node_t>(*other.as.for_stmt->init);
+    as.for_stmt->condition = std::make_shared<ast_node_t>(*other.as.for_stmt->condition);
+    as.for_stmt->action = std::make_shared<ast_node_t>(*other.as.for_stmt->action);
+    as.for_stmt->body = std::make_shared<ast_node_t>(*other.as.for_stmt->body);
+    break;
+  case eWhile:
+    as.while_stmt->condition = std::make_shared<ast_node_t>(*other.as.while_stmt->condition);
+    as.while_stmt->body = std::make_shared<ast_node_t>(*other.as.while_stmt->body);
+    break;
+  case eRangeExpr:
+    as.range_expr->min = std::make_shared<ast_node_t>(*other.as.range_expr->min);
+    as.range_expr->max = std::make_shared<ast_node_t>(*other.as.range_expr->max);
+    break;
+  case eStructExpr:
+    as.struct_expr->type = std::make_shared<ast_node_t>(*other.as.struct_expr->type);
+    as.struct_expr->values.clear();
+    for (auto &[n, v] : other.as.struct_expr->values) {
+      as.struct_expr->values.emplace(n, std::make_shared<ast_node_t>(*v));
+    }
+    break;
+  case eDefer:
+    as.defer_expr->action = std::make_shared<ast_node_t>(*other.as.defer_expr->action);
+    break;
+  case eMove:
+    as.move_expr->symbol = std::make_shared<ast_node_t>(*other.as.move_expr->symbol);
+    break;
+  case eArrayAccess:
+    as.array_access_expr->value = std::make_shared<ast_node_t>(*other.as.array_access_expr->value);
+    as.array_access_expr->offset = std::make_shared<ast_node_t>(*other.as.array_access_expr->offset);
+    break;
+  case eSliceExpr:
+    as.slice_expr->pointer = std::make_shared<ast_node_t>(*other.as.slice_expr->pointer);
+    as.slice_expr->size = std::make_shared<ast_node_t>(*other.as.slice_expr->size);
+    break;
+  case eArrayInitializeExpr:
+    as.array_initialize_expr->values.clear();
+    for (auto &req : other.as.array_initialize_expr->values) {
+      as.array_initialize_expr->values.emplace_back(std::make_shared<ast_node_t>(*req));
+    }
+    break;
+  case eTupleExpr:
+    as.tuple_expr->elements.clear();
+    for (auto &[name, v] : other.as.tuple_expr->elements) {
+      as.tuple_expr->elements.emplace_back(name, v);
+    }
+    break;
+  default:
+    break;
+  }
+}
+
 void ast_node_t::reset() {
   switch (kind) {
   case eType: delete as.type; break;
@@ -28,7 +209,6 @@ void ast_node_t::reset() {
   case eFunctionDecl: delete as.fn_decl; break;
   case eFunctionImpl: delete as.fn_impl; break;
   case eFunctionParameter: delete as.fn_param; break;
-  case eExtern: delete as.extern_decl; break;
   case eReturn: delete as.return_stmt; break;
   case eCall: delete as.call_expr; break;
   case eLiteral: delete as.literal_expr; break;
@@ -46,8 +226,20 @@ void ast_node_t::reset() {
   case eStructExpr: delete as.struct_expr; break;
   case eRangeExpr: delete as.range_expr; break;
   case eContract: delete as.contract_decl; break;
+  case eDefer: delete as.defer_expr; break;
+  case eMove: delete as.move_expr; break;
+  case eTemplate: delete as.template_decl; break;
+  case eArrayAccess: delete as.array_access_expr; break;
+  case eSizeOf: delete as.sizeof_expr; break;
+  case eSliceExpr: delete as.slice_expr; break;
+  case eArrayInitializeExpr: delete as.array_initialize_expr; break;
+  case eTupleExpr: delete as.tuple_expr; break;
+  case eEnumDecl: delete as.enum_decl; break;
   case eSelf:
   case eInvalid:
+  case eZero:
+  case eUninitialized:
+  case eNil:
     break;
   }
   kind = eInvalid;

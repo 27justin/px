@@ -21,11 +21,6 @@ int main(int argc, char **argv) {
       auto src = std::make_shared<source_t>(source, argv[1]);
       lexer_t lexer(src);
 
-      // while (!lexer.eof()) {
-      //   token_t t = lexer.next();
-      //   std::cout << "("<<(int)t.type<<"): " << src.string(t.location) << "\n";
-      // }
-
       try {
         parser_t parser(lexer, src);
         auto tu = parser.parse();
@@ -36,10 +31,6 @@ int main(int argc, char **argv) {
 
         analyzer_t analyzer(src);
         auto su = analyzer.analyze(tu);
-
-        // for (auto &node : su.unit.declarations) {
-        //   dump_ast(*node);
-        // }
 
         codegen_t codegen(std::move(su));
         codegen.generate();

@@ -11,11 +11,13 @@
 #include "scope.hpp"
 
 #include <vector>
-#include <map>
+#include <unordered_map>
 
 struct semantic_info_t {
   translation_unit_t unit;
   SP<scope_t> scope;
+  std::unordered_map<specialized_path_t, SP<ast_node_t>> template_instantiations;
+  std::unordered_map<std::string, SP<type_t>> imported_symbols;
 };
 
 struct analyze_error_t {
@@ -51,6 +53,7 @@ private:
   std::vector<SP<scope_t>> scope_stack;
   std::vector<SP<type_t>> function_stack;
   std::vector<SP<type_t>> type_hint_stack; //< Used to infer types in certain cases.
+  std::unique_ptr<semantic_info_t> info;
 
   diagnostic_stack_t diagnostics;
 
@@ -66,7 +69,7 @@ private:
   bool is_lvalue(N);
   bool is_mutable(N);
 
-  QT analyze_node(N);
+  QT analyze_node(N&);
   QT analyze_binding(N);
 
   QT analyze_function_decl(N, SP<type_t>);
@@ -102,6 +105,7 @@ private:
   QT analyze_attribute(N);
   QT analyze_tuple(N);
   QT analyze_enum(N);
+  QT analyze_unary(N);
   QT analyze_zero(N);
   QT analyze_uninitialized(N);
 
@@ -133,6 +137,8 @@ private:
   bool can_fit_literal(const std::string &, QT target_type);
   QT ensure_concrete(QT);
   bool is_within_bounds(__int128_t, QT);
+
+  N expand(const std::string &v);
 
   specialized_path_t resolve_path(const specialized_path_t&);
 };

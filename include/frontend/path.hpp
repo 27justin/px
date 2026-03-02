@@ -28,9 +28,15 @@ struct specialized_path_t {
   specialized_path_t(const std::string &);
   specialized_path_t(const std::vector<specialized_segment_t> &segments);
 
-  std::shared_ptr<type_decl_t> param(size_t);
+  bool operator==(const specialized_path_t&) const;
 
+  std::shared_ptr<type_decl_t> param(size_t);
+  void push(const std::string &segment);
   bool is_simple() const;
+};
+
+template <> struct std::hash<specialized_path_t> {
+  std::size_t operator()(const specialized_path_t &) const noexcept;
 };
 
 struct template_segment_t {

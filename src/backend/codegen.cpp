@@ -84,9 +84,32 @@ codegen_t::init_target() {
 void codegen_t::compile_to_object(const std::string &filename) {
   std::error_code EC;
 
-  llvm::raw_fd_ostream ir_dest(std::filesystem::path(filename).filename().replace_extension(".ll").string(), EC, llvm::sys::fs::OF_None);
-  module->print(ir_dest, nullptr);
-  module->print(llvm::outs(), nullptr);
+  auto ir_file = std::filesystem::path(filename)
+                     .filename()
+                     .replace_extension(".ll")
+                     .string();
+
+  auto obj_file = std::filesystem::path(filename)
+                     .filename()
+                     .replace_extension(".o")
+                     .string();
+
+  if (true) {
+    llvm::raw_fd_ostream ir_dest(ir_file, EC, llvm::sys::fs::OF_None);
+    module->print(ir_dest, nullptr);
+    module->print(llvm::outs(), nullptr);
+  }
+
+  llvm::raw_fd_ostream obj_dest(obj_file, EC, llvm::sys::fs::OF_None);
+  llvm::legacy::PassManager pass;
+  auto file_type = llvm::CodeGenFileType::ObjectFile;
+
+  if (target_machine->addPassesToEmitFile(pass, obj_dest, nullptr, file_type)) {
+    throw std::runtime_error("Target Machine can't emit object file.");
+  }
+
+  pass.run(*module);
+  obj_dest.flush();
 }
 
 codegen_t::codegen_t(semantic_info_t &&s) : info(std::move(s)) {
@@ -99,16 +122,53 @@ codegen_t::codegen_t(semantic_info_t &&s) : info(std::move(s)) {
   init_target();
 }
 
+void codegen_t::link_external_symbol(const std::string &name, SP<type_t> type) {
+    llvm::Type *llvm_type = ensure_type(type);
+
+    switch (type->kind) {
+    case type_kind_t::eFunction: {
+        auto *func_type = llvm::cast<llvm::FunctionType>(llvm_type);
+
+        auto func_callee = module->getOrInsertFunction(name, func_type);
+        auto *func = llvm::cast<llvm::Function>(func_callee.getCallee());
+
+        func->setLinkage(llvm::GlobalValue::ExternalLinkage);
+
+        auto value = std::make_shared<llvm_value_t>(func, llvm_type, false);
+        scope()->set(name, value);
+        break;
+    }
+    default: {
+        llvm::GlobalVariable *variable = new llvm::GlobalVariable(
+            *module,
+            llvm_type,
+            false,
+            llvm::GlobalValue::ExternalLinkage,
+            nullptr,
+            name
+        );
+
+        auto value = std::make_shared<llvm_value_t>(variable, llvm_type, true);
+        scope()->set(name, value);
+        break;
+    }
+    }
+}
+
 void
 codegen_t::generate() {
+  for (auto &[external, type] : info.imported_symbols) {
+    link_external_symbol(external, type);
+  }
+
   for (auto &node : info.unit.declarations) {
     visit_node(node);
   }
 }
 
 llvm::Type *codegen_t::ensure_type(SP<type_t> type) {
-  if (llvm_type_cache.contains(type)) {
-    return llvm_type_cache.at(type);
+  if (type_llvm_cache.contains(type)) {
+    return type_llvm_cache.at(type);
   }
 
   llvm::Type* result = nullptr;
@@ -136,6 +196,19 @@ llvm::Type *codegen_t::ensure_type(SP<type_t> type) {
     }
     break;
   }
+  case type_kind_t::eEnum: {
+    // TODO: Data size should be changeable
+    result = llvm::Type::getInt32Ty(*context);
+    break;
+  }
+  case type_kind_t::eTuple: {
+    std::vector<llvm::Type *> types;
+    for (auto &[_, v] : type->as.tuple->elements) {
+      types.push_back(ensure_type(v));
+    }
+    result = llvm::StructType::create(types, to_string(type->name), true);
+    break;
+  }
   case type_kind_t::eFunction: {
     auto fn = type->as.function;
     llvm::Type* ret_ty = ensure_type(fn->return_type);
@@ -143,6 +216,10 @@ llvm::Type *codegen_t::ensure_type(SP<type_t> type) {
     for (auto &p : fn->arg_types) {
       auto param_ty = ensure_type(p);
       params.push_back(param_ty);
+    }
+
+    if (fn->receiver) {
+      params.insert(params.begin(), ensure_type(fn->receiver));
     }
 
     result = llvm::FunctionType::get(ret_ty, params, fn->is_var_args);
@@ -192,7 +269,8 @@ llvm::Type *codegen_t::ensure_type(SP<type_t> type) {
   }
 
   // Cache the result
-  llvm_type_cache[type] = result;
+  type_llvm_cache[type] = result;
+  llvm_type_cache[result] = type;
   return result;
 }
 
@@ -227,6 +305,30 @@ codegen_t::cast(llvm::Type *type, const llvm_value_t &value) {
                         type, true};
   }
   throw std::runtime_error ("Unhandled cast");
+}
+
+uint32_t
+codegen_t::field_index(llvm::Type *ty, const std::string &name) {
+  auto type = llvm_type_cache.at(ty);
+
+  switch (type->kind) {
+  case type_kind_t::ePointer: {
+    // Pointers automatically get dereferenced.
+    return field_index(ensure_type(type->as.pointer->deref()), name);
+  }
+  case type_kind_t::eStruct: {
+    auto struct_layout = type->as.struct_layout;
+    auto member = struct_layout->member(name);
+    return std::distance(struct_layout->members.data(), member);
+  }
+  case type_kind_t::eTuple: {
+    auto tuple_layout = type->as.tuple;
+    auto member = tuple_layout->element(name);
+    return std::distance(tuple_layout->elements.cbegin(), member);
+  }
+  default:
+    throw std::runtime_error("Unknown type in field_index");
+  }
 }
 
 SP<llvm_value_t>
@@ -269,8 +371,31 @@ VISITOR(function_decl) {
   auto func = llvm::Function::Create(llvm_fn, llvm::GlobalValue::ExternalLinkage, name, *module);
 
   if (is_import && to_string(*current_binding) != name) {
-    std::string asmAlias = ".set " + to_string(*current_binding) + ", " + name;
-    module->appendModuleInlineAsm(asmAlias);
+    // Functions that are imported will receive a wrapper implementation.
+    //
+    // This is due to GlobalAlias not working on imported symbols.
+
+    auto *wrapper = llvm::Function::Create(llvm_fn, llvm::GlobalValue::ExternalLinkage, to_string(*current_binding), *module);
+
+    auto *bb = llvm::BasicBlock::Create(*context, "entry", wrapper);
+    builder->SetInsertPoint(bb);
+
+    std::vector<llvm::Value*> args;
+    for (auto &arg : wrapper->args()) args.push_back(&arg);
+    auto *call = builder->CreateCall(llvm_fn, func, args);
+
+    if (llvm_fn->getReturnType()->isVoidTy()) {
+      builder->CreateRetVoid();
+    } else {
+      builder->CreateRet(call);
+    }
+
+    // Always inline, these functions have to be "invisible" to the
+    // machine.
+    wrapper->addFnAttr(llvm::Attribute::AlwaysInline);
+
+    return scope()->set(to_string(*current_binding), std::make_shared<llvm_value_t>(
+                          wrapper, llvm_type, false));
   }
 
   return scope()->set(to_string(*current_binding), std::make_shared<llvm_value_t>(func, llvm_fn, false));
@@ -292,8 +417,7 @@ VISITOR(attribute) {
   return value;
 }
 
-SP<llvm_value_t>
-codegen_t::visit_function_impl(SP<ast_node_t> node) {
+VISITOR(function_impl) {
   function_impl_t *impl = node->as.fn_impl;
 
   auto llvm_type = ensure_type(node->type);
@@ -303,6 +427,9 @@ codegen_t::visit_function_impl(SP<ast_node_t> node) {
   auto ret_val = scope()->set(to_string(*current_binding), std::make_shared<llvm_value_t>(func, llvm_fn, false));
 
   llvm::BasicBlock *entry = llvm::BasicBlock::Create(*context, "entry", func);
+
+  auto current_block = builder->GetInsertBlock();
+
   builder->SetInsertPoint(entry);
 
   scopes.emplace_back(std::make_shared<llvm_scope_t>(scopes.back()));
@@ -310,7 +437,8 @@ codegen_t::visit_function_impl(SP<ast_node_t> node) {
   for (uint64_t i = 0; i < impl->declaration.parameters.size(); ++i) {
     auto &param = impl->declaration.parameters[i];
     auto ty = ensure_type(param.resolved_type);
-    scope()->set(param.name, std::make_shared<llvm_value_t>(func->args().begin() + i));
+    auto llvm_value = func->args().begin() + i;
+    scope()->set(param.name, std::make_shared<llvm_value_t>(llvm_value, ty, true));
   }
 
   auto result = visit_node(impl->block);
@@ -320,6 +448,7 @@ codegen_t::visit_function_impl(SP<ast_node_t> node) {
     builder->CreateRetVoid();
   }
 
+  builder->SetInsertPoint(current_block);
   scopes.pop_back();
   return ret_val;
 }
@@ -333,6 +462,11 @@ VISITOR(call) {
   for (auto &arg : call->arguments) {
     auto value = visit_node(arg);
     args.push_back(load(ensure_type(arg->type), *value).value);
+  }
+
+  if (call->implicit_receiver) {
+    auto receiver = visit_node(call->implicit_receiver);
+    args.insert(args.begin(), load(ensure_type(call->implicit_receiver->type), *receiver).value);
   }
 
   auto callee = visit_node(call->callee);
@@ -351,7 +485,7 @@ VISITOR(block) {
   }
 
   if (block->has_implicit_return)
-    return value;
+    return std::make_shared<llvm_value_t>(load(value).value, value->type, true);
   else
     return nullptr;
 }
@@ -378,8 +512,7 @@ VISITOR(declaration) {
 
     default: {
       auto init = visit_node(decl->value);
-
-      auto val = load(ensure_type(decl->value->type), *init);
+      auto val = load(init);
 
       if (val.type != value_type) {
         val = cast(value_type, val);
@@ -409,7 +542,8 @@ VISITOR(literal) {
   llvm::Value *value = nullptr;
   switch (expr->type) {
   case literal_type_t::eInteger: {
-    value = llvm::ConstantInt::get(type, std::stoi(expr->value));
+    // TODO: Can't handle uint64_t
+    value = llvm::ConstantInt::get(type, std::stoll(expr->value));
     break;
   }
   case literal_type_t::eBool: {
@@ -431,9 +565,89 @@ VISITOR(literal) {
   return std::make_shared<llvm_value_t>(value, type, true);
 }
 
+SP<llvm_value_t>
+codegen_t::resolve_member(const llvm_value_t &val, const std::string &member) {
+  try {
+    llvm::Value *base_ptr = val.value;
+    auto base_type = llvm_type_cache.at(val.type);
+
+    // Auto deref pointers until we reach the base type.
+    while (base_type->kind == type_kind_t::ePointer) {
+      base_type = base_type->as.pointer->deref();
+      base_ptr = builder->CreateLoad(ensure_type(base_type), base_ptr);
+    }
+
+    llvm::Type *llvm_type = ensure_type(base_type);
+
+    int field_idx = field_index(llvm_type, member);
+    if (field_idx == -1) {
+      throw std::runtime_error("Member " + member + " not found on struct");
+    }
+
+    llvm::Value* member_ptr = builder->CreateStructGEP(llvm_type, val.value, field_idx, member);
+    llvm::Type* member_type = llvm::cast<llvm::StructType>(llvm_type)->getElementType(field_idx);
+
+    return std::make_shared<llvm_value_t>(member_ptr, member_type, false);
+  } catch (...) {
+    return nullptr;
+  }
+}
+
 VISITOR(symbol) {
   symbol_expr_t *symbol = node->as.symbol;
-  return scope()->resolve(to_string(symbol->path));
+
+  // Fully specified path
+  auto value = scope()->resolve(to_string(symbol->path));
+  if (value)
+    return value;
+
+  // Template
+  if (info.template_instantiations.contains(symbol->path)) {
+    auto template_ = info.template_instantiations.at(symbol->path);
+
+    current_binding = symbol->path;
+    visit_node(template_);
+
+    return scope()->resolve(to_string(symbol->path));
+  }
+
+  // Member lookups
+  auto path = symbol->path;
+  SP<llvm_value_t> left {nullptr};
+
+  specialized_segment_t segment = path.segments.front();
+  left = scope()->resolve(segment.name);
+  // Erase first segment
+  path.segments.erase(path.segments.begin());
+
+  do {
+    // Get next one.
+    segment = path.segments.front();
+
+    auto member = resolve_member(*left, segment.name);
+    if (member == nullptr) {
+      // If we couldn't resolve this segment, it might be a UFCS function.
+      break;
+    }
+
+    left = member;
+    path.segments.erase(path.segments.begin());
+  } while (left && path.segments.size() > 0);
+
+  if (left && path.segments.size() == 0) {
+    return left;
+  }
+
+  if (left) {
+    // UFCS
+    specialized_path_t ufcs = path;
+    ufcs.segments.insert(ufcs.segments.begin(), symbol->path.segments.begin(), symbol->path.segments.end() - ufcs.segments.size());
+
+    left = scope()->resolve(to_string(ufcs));
+    return left;
+  }
+
+  return left;
 }
 
 VISITOR(address_of) {
@@ -646,6 +860,105 @@ VISITOR(for) {
     return nullptr;
 }
 
+VISITOR(while) {
+    auto* stmt = node->as.while_stmt;
+    auto* function = builder->GetInsertBlock()->getParent();
+
+    llvm::BasicBlock* condBB = llvm::BasicBlock::Create(*context, "while.cond", function);
+    llvm::BasicBlock* bodyBB = llvm::BasicBlock::Create(*context, "while.body", function);
+    llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(*context, "while.merge", function);
+
+    builder->CreateBr(condBB);
+
+    builder->SetInsertPoint(condBB);
+    auto cond_val = visit_node(stmt->condition);
+    builder->CreateCondBr(cond_val->value, bodyBB, mergeBB);
+
+    builder->SetInsertPoint(bodyBB);
+    scopes.emplace_back(scopes.back());
+    visit_node(stmt->body);
+    scopes.pop_back();
+
+    builder->CreateBr(condBB);
+
+    builder->SetInsertPoint(mergeBB);
+    return nullptr;
+}
+
+VISITOR(struct) {
+  llvm::StructType *type = llvm::dyn_cast<llvm::StructType>(ensure_type(node->type));
+  return nullptr;
+}
+
+VISITOR(enum) {
+  auto enum_type = ensure_type(node->type);
+
+  auto enum_layout = node->type->as.enum_;
+  auto storage_type = builder->getInt32Ty();
+  for (auto &[name, val] : enum_layout->values) {
+    auto binding = *current_binding;
+    binding.push(name);
+
+    scope()->set(to_string(binding), std::make_shared<llvm_value_t>(llvm::ConstantInt::get(storage_type, val), storage_type, true));
+  }
+  return nullptr;
+}
+
+VISITOR(struct_initializer) {
+  auto* expr = node->as.struct_expr;
+  llvm::Type* struct_ty = ensure_type(node->type);
+
+  llvm::Value* struct_ptr = builder->CreateAlloca(struct_ty, nullptr, "struct_tmp");
+
+  for (auto const& [name, value_ast] : expr->values) {
+    uint32_t nfield = field_index(struct_ty, name);
+
+    llvm::Value* field_ptr = builder->CreateStructGEP(struct_ty, struct_ptr, nfield);
+
+    auto val = visit_node(value_ast);
+    builder->CreateStore(load(val).value, field_ptr);
+  }
+
+  return std::make_shared<llvm_value_t>(struct_ptr, struct_ty);
+}
+
+VISITOR(tuple) {
+  tuple_expr_t *expr = node->as.tuple_expr;
+
+  auto tuple_type = ensure_type(node->type);
+
+  llvm::Value *tuple_ptr = builder->CreateAlloca(tuple_type, nullptr, "tuple_tmp");
+
+  int64_t nmemb = 0;
+  for (auto const &[key, value_ast] : expr->elements) {
+    // Tuples can have named indices, unnamed ones are sequentially
+    // numbered, while ignoring named ones.
+    //
+    // This just means that (i32, g: i32, b: i32, i32) has indices (0, g, b, 1)
+    auto nfield = field_index(tuple_type, key.has_value() ? *key : std::to_string(nmemb++));
+
+    llvm::Value *field_ptr = builder->CreateStructGEP(tuple_type, tuple_ptr, nfield);
+
+    auto value = visit_node(value_ast);
+    builder->CreateStore(load(value).value, field_ptr);
+  }
+
+  return std::make_shared<llvm_value_t>(tuple_ptr, tuple_type, false);
+}
+
+VISITOR(unary) {
+  unary_expr_t *expr = node->as.unary;
+
+  auto value = visit_node(expr->value);
+
+  // ! (negate)
+  if (expr->op == token_type_t::operatorExclamation) {
+    return std::make_shared<llvm_value_t>(builder->CreateNot(load(value).value, "bool_not"), value->type, true);
+  }
+
+  return value;
+}
+
 SP<llvm_value_t>
 codegen_t::visit_node(SP<ast_node_t> node) {
   if (!node->type) {
@@ -705,12 +1018,32 @@ codegen_t::visit_node(SP<ast_node_t> node) {
     result = visit_array_access(node);
     break;
 
-  // case ast_node_t::eWhile:
-  //   result = visit_while(node);
-  //   break;
+  case ast_node_t::eWhile:
+    result = visit_while(node);
+    break;
+
+  case ast_node_t::eStructDecl:
+    result = visit_struct(node);
+    break;
+
+  case ast_node_t::eStructExpr:
+    result = visit_struct_initializer(node);
+    break;
+
+  case ast_node_t::eEnumDecl:
+    result = visit_enum(node);
+    break;
 
   case ast_node_t::eFor:
     result = visit_for(node);
+    break;
+
+  case ast_node_t::eTupleExpr:
+    result = visit_tuple(node);
+    break;
+
+  case ast_node_t::eUnary:
+    result = visit_unary(node);
     break;
 
   default:

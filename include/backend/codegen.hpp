@@ -40,7 +40,8 @@ struct codegen_t {
   void compile_to_object(const std::string &filename);
 private:
   semantic_info_t info;
-  std::map<SP<type_t>, llvm::Type *> llvm_type_cache;
+  std::map<llvm::Type *, SP<type_t>> llvm_type_cache;
+  std::map<SP<type_t>, llvm::Type *> type_llvm_cache;
   std::vector<SP<llvm_scope_t>> scopes;
 
   SP<llvm_scope_t> scope();
@@ -66,6 +67,10 @@ private:
   // ----------
   SP<llvm_value_t> address_of(SP<ast_node_t> node);
 
+  uint32_t field_index(llvm::Type *, const std::string &);
+  SP<llvm_value_t> resolve_member(const llvm_value_t &, const std::string &);
+  void link_external_symbol(const std::string &name, SP<type_t> type);
+
   VISITOR(node);
   VISITOR(binding);
   VISITOR(block);
@@ -79,6 +84,11 @@ private:
   VISITOR(array_access);
   VISITOR(while);
   VISITOR(for);
+  VISITOR(struct);
+  VISITOR(enum);
+  VISITOR(tuple);
+  VISITOR(unary);
+  VISITOR(struct_initializer);
   VISITOR(function_decl);
   VISITOR(function_impl);
 

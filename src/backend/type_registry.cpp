@@ -228,7 +228,7 @@ SP<type_t> type_registry_t::self_placeholder(const specialized_path_t& owner_nam
 }
 
 SP<type_t>
-type_registry_t::tuple_of(const std::unordered_map<std::string, SP<type_t>> &elements) {
+type_registry_t::tuple_of(const std::vector<std::pair<std::string, SP<type_t>>> &elements) {
   auto t = std::make_shared<type_t>();
   t->kind = eTuple;
   t->as.tuple = new tuple_t {elements};
@@ -242,6 +242,10 @@ type_registry_t::tuple_of(const std::unordered_map<std::string, SP<type_t>> &ele
 
   t->alignment = max_alignment;
   t->size = size;
+  t->name = to_string(t);
+
+  if (registry.contains(to_string(t)))
+    return registry.at(to_string(t));
 
   registry[to_string(t)] = t;
   return t;

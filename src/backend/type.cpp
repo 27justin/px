@@ -121,11 +121,21 @@ std::string to_string(const type_t &type) {
     ss << "(";
     auto tuple = type.as.tuple;
     for (auto it = tuple->elements.begin(); it != tuple->elements.end(); ++it) {
-      ss << it->first << ": " << to_string(it->second);
-      if (it != tuple->elements.end())
+      bool is_positional = !it->first.empty() && std::isdigit(it->first[0]);
+
+      if (!is_positional) {
+        ss << it->first << ": ";
+      }
+
+      ss << to_string(it->second);
+
+      auto next_it = std::next(it);
+      if (next_it != tuple->elements.end()) {
         ss << ", ";
+      }
     }
     ss << ")";
+    break;
   }
   default:
     ss << to_string(type.name);
@@ -209,4 +219,13 @@ pointer_t::pointer_to(pointer_kind_t kind, SP<type_t> base, bool is_mutable) {
   type->name = base->name;
 
   return type;
+}
+
+std::vector<std::pair<std::string, SP<type_t>>>::const_iterator
+tuple_t::element(const std::string &name) const {
+  for (auto it = elements.cbegin(); it != elements.cend(); ++it) {
+    if (it->first == name)
+      return it;
+  }
+  return elements.cend();
 }

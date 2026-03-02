@@ -9,6 +9,12 @@ scope_t::scope_t(SP<scope_t> parent)
     , types(parent ? &parent->types : nullptr) {
 }
 
+
+const std::map<std::string, SP<symbol_t>> &
+scope_t::symbol_map() const {
+  return symbols;
+}
+
 void scope_t::merge(const scope_t &other) {
   symbols.insert(other.symbols.begin(), other.symbols.end());
   templates.insert(templates.end(), other.templates.begin(), other.templates.end());

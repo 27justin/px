@@ -26,6 +26,8 @@ struct scope_t {
 
   void merge(const scope_t&);
 
+  const std::map<std::string, SP<symbol_t>> &symbol_map() const;
+
   type_registry_t types;
 private:
   std::map<std::string, SP<symbol_t>> symbols;

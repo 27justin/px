@@ -14,6 +14,21 @@ specialized_path_t::is_simple() const {
   return true;
 }
 
+void
+specialized_path_t::push(const std::string &name) {
+  segments.emplace_back(name);
+}
+
+std::size_t std::hash<specialized_path_t>::operator()(
+    const specialized_path_t &path) const noexcept {
+  return std::hash<std::string>{}(to_string(path));
+}
+
+bool
+specialized_path_t::operator==(const specialized_path_t &other) const {
+  return to_string(*this) == to_string(other);
+}
+
 std::string to_string(const generic_t &generic) {
   std::stringstream ss;
   ss << generic.binding;
