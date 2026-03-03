@@ -22,8 +22,10 @@ type_registry_t::type_registry_t(type_registry_t *parent_)
 
     add_builtin({"i32"}, 4 * 8, 4, type_kind_t::eInt);
     add_builtin({"u32"}, 4 * 8, 4, type_kind_t::eUint);
+
     add_builtin({"i64"}, 8 * 8, 8, type_kind_t::eInt);
     add_builtin({"u64"}, 8 * 8, 8, type_kind_t::eUint);
+
     add_builtin({"f32"}, 4 * 8, 4, type_kind_t::eFloat);
     add_builtin({"f64"}, 8 * 8, 8, type_kind_t::eFloat);
     add_builtin({"bool"}, 1, 1, type_kind_t::eBool);

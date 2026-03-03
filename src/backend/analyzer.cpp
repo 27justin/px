@@ -413,7 +413,12 @@ A::analyze_call(N node) {
   for (auto i = 0; i < signature->arg_types.size(); ++i) {
     auto param = signature->arg_types[i];
     auto arg_node = call->arguments[i];
+
+    // Hint what we need, for int types this auto-coerces to them.
+    push_type_hint(param);
+
     auto arg_type = analyze_node(arg_node); // Existing call
+    pop_type_hint();
 
     // Check RValue requirement (^T)
     if (param->kind == type_kind_t::eRValueReference) {
@@ -434,10 +439,18 @@ A::analyze_call(N node) {
     // Rewrite the callee symbol, to point the static symbol.
     auto member_function = call->callee->as.symbol->path.segments.back();
 
-    std::vector<specialized_segment_t> path = { member_function };
-    path.insert(path.begin(), signature->receiver->name.segments.begin(), signature->receiver->name.segments.end());
+    // e.g. `self.member.func`
+    auto qualified_symbol_path = call->callee->as.symbol->path;
 
-    call->implicit_receiver = make_node<symbol_expr_t>(ast_node_t::eSymbol, {specialized_path_t{call->callee->as.symbol->path.segments.front().name}}, node->location, node->source);
+    // e.g. `std.contract.func` (type of `self.member` + member function)
+    std::vector<specialized_segment_t> full_symbol_path = { member_function };
+    full_symbol_path.insert(full_symbol_path.begin(), signature->receiver->name.segments.begin(), signature->receiver->name.segments.end());
+
+    // e.g. `self.member` path to the receiver
+    std::vector<specialized_segment_t> receiver_path;
+    receiver_path.insert(receiver_path.begin(), qualified_symbol_path.segments.begin(), qualified_symbol_path.segments.end() - 1);
+
+    call->implicit_receiver = make_node<symbol_expr_t>(ast_node_t::eSymbol, {receiver_path}, node->location, node->source);
 
     // Automatically add a `&` if the receiver is a pointer and NOT a self
     // placeholder.
@@ -456,7 +469,7 @@ A::analyze_call(N node) {
 
     analyze_node(call->implicit_receiver);
 
-    call->callee = make_node<symbol_expr_t>(ast_node_t::eSymbol, {path}, node->location, node->source);
+    call->callee = make_node<symbol_expr_t>(ast_node_t::eSymbol, {full_symbol_path}, node->location, node->source);
     analyze_node(call->callee);
   }
 
@@ -730,6 +743,9 @@ A::is_mutable(N node) {
       }
     }
     return symbol->is_mutable;
+  }
+  case ast_node_t::eArrayAccess: {
+    return is_mutable(node->as.array_access_expr->value);
   }
   default:
     assert(false && "is_mutable on invalid node type");
@@ -1011,7 +1027,11 @@ A::analyze_contract(N node) {
       if (binding->value) {
         // <identifier> := fn ()
         assert(binding->value->kind == ast_node_t::eFunctionDecl);
-        requirements[to_string(binding->name)] = analyze_function_decl(binding->value, self_type);
+        auto type = analyze_function_decl(binding->value, self_type);
+        requirements[to_string(binding->name)] = type;
+
+        // Contract functions have to be added to the scope.
+        scope().add(to_string(contract_name) + "." + to_string(binding->name), type);
       } else {
         // <identifier>: <type>
         requirements[to_string(binding->name)] = resolve_type(*binding->type);

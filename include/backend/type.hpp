@@ -125,6 +125,7 @@ struct type_t {
   ~type_t() = default;
 
   bool is_numeric() const;
+  bool is_signed() const;
 
   bool operator ==(const type_t &other) const;
 

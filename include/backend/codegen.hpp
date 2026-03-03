@@ -18,6 +18,7 @@ struct llvm_value_t {
   llvm::Value *value;
   llvm::Type *type;
   bool is_rvalue;
+  SP<type_t> base_type = nullptr;
 };
 
 struct llvm_scope_t {
@@ -103,6 +104,7 @@ private:
   VISITOR(struct_initializer);
   VISITOR(nil);
   VISITOR(if);
+  VISITOR(deref);
   VISITOR(function_decl);
   VISITOR(function_impl);
 

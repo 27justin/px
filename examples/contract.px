@@ -1,4 +1,4 @@
-import libc
+//import libc
 
 /*    RAYLIB    */
 raylib.Color := type (u8, u8, u8, u8)
@@ -20,17 +20,8 @@ drawable := contract {
   draw := fn (!self, color: raylib.Color)
 }
 
-/*
-drawable.draw := fn (self: !any, color: raylib.Color) {
-  vtable = load_vtable(self);
-  data = load_data(self);
-  vtable.draw(data, color);
-}
-*/
-
 render := fn (object: drawable, color: raylib.Color) {
   object.draw(color);
-  //drawable.draw(object, color);
 }
 
 circle := struct {

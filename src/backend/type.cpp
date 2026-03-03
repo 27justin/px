@@ -6,6 +6,10 @@ bool type_t::is_numeric() const {
   return kind == eInt || kind == eUint || kind == eFloat;
 }
 
+bool type_t::is_signed() const {
+  return kind == eInt;
+}
+
 bool type_t::operator==(const type_t &other) const {
   if (other.kind == type_kind_t::eAlias) {
     if (*other.as.alias->alias == *this)

@@ -4,8 +4,22 @@ main := fn () -> i32 {
   let allocator := std.allocator.heap.init();
 
   let vec: std.vector<i32> = std.vector<i32>.init(allocator as std.allocator);
-  let i: i32 = 99;
-  vec.push(i);
+  vec.push(1);
+  vec.push(2);
+  vec.push(3);
+
+  libc.printf("Size: %llu\n", vec.size());
+
+  for i in 0..vec.size() {
+    libc.printf("  #%i. %i\n", i, vec.at(i as i64).*);
+  }
+  libc.printf("\n");
+
+  libc.printf("Last  (pre-pop): %i\n", vec.at(-1).*);
+
+  vec.pop();
+  libc.printf("Last (post-pop): %i\n", vec.at(-1).*);
+  libc.printf("Size: %llu\n", vec.size());
   0
 }
 

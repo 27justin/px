@@ -258,6 +258,21 @@ void dump_ast(ast_node_t &node, size_t indent_val) {
 
   std::cout << indent();
   switch (node.kind) {
+  case ast_node_t::eArrayAccess: {
+    std::cout << "[ArrayAccess ";
+    dump_ast(*node.as.array_access_expr->value);
+    std::cout << " at ";
+    dump_ast(*node.as.array_access_expr->offset);
+    std::cout << "]";
+    return;
+  }
+  case ast_node_t::eTemplate: {
+    template_decl_t *decl = node.as.template_decl;
+    std::cout << "[Template " << to_string(decl->name);
+    dump_ast(*decl->value);
+    std::cout << "]\n";
+    return;
+  }
   case ast_node_t::eSizeOf: {
     sizeof_expr_t *expr = node.as.sizeof_expr;
     std::cout << "[Sizeof " << to_string(expr->value) << "]";

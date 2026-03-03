@@ -1,6 +1,7 @@
 import libc
 
-main := fn () {
-  let file := libc.fopen("test.txt", "w+");
-  file.write("Hello, hell !\n", 14);
+main := fn () -> i32 {
+  let full: i64 = -1;
+  libc.printf("%lli > 0: %i\n", full, full > 0);
+  0
 }

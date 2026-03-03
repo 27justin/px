@@ -122,7 +122,7 @@ int get_unary_binding_power(TT type) {
   case TT::operatorExclamation:
     return 75;
   case TT::operatorAnd:
-    return 81;
+    return 75;
   default:
     return 25;
   }
@@ -440,6 +440,7 @@ P::parse_expression(int min_binding_power, bool allow_struct_literal) {
         return left;
       }
 
+      start = token.location.start;
       left = make_node<call_expr_t>(ast_node_t::eCall, {
           .callee = left,
           .arguments = parse_function_arguments()

@@ -194,7 +194,12 @@ void codegen_t::contract_emit_dynamic_dispatcher(SP<type_t> contract,
   specialized_path_t dispatcher_path {contract->name.segments};
   dispatcher_path.segments.push_back(symbol_name);
 
-  auto func = llvm::Function::Create(dispatcher_fn, llvm::GlobalValue::ExternalLinkage, to_string(dispatcher_path), *module);
+  auto func = llvm::Function::Create(dispatcher_fn, llvm::GlobalValue::LinkOnceODRLinkage, to_string(dispatcher_path), *module);
+  func->setVisibility(llvm::GlobalValue::HiddenVisibility);
+
+  // TODO: Required? LinkOnceODRLinkage seems to have no effect at
+  // times, causing multiple definitions.
+  func->setComdat(module->getOrInsertComdat(to_string(dispatcher_path)));
 
   llvm::BasicBlock *entry = llvm::BasicBlock::Create(*context, "entry", func);
 
@@ -405,6 +410,12 @@ codegen_t::cast(llvm::Type *type, const llvm_value_t &value) {
     return llvm_value_t{builder->CreateZExtOrTrunc(load(value).value, type),
                         type, true};
   }
+
+  if ((value.type->isPointerTy() && type->isIntegerTy()) ||
+      (value.type->isIntegerTy() && type->isPointerTy())) {
+    return llvm_value_t{builder->CreateBitOrPointerCast(value.value, type), type, true};
+  }
+
   throw std::runtime_error ("Unhandled cast");
 }
 
@@ -477,6 +488,12 @@ codegen_t::address_of(SP<ast_node_t> node) {
 
     //assert(left->is_rvalue == false && left->type->isPointerTy() == false);
     return std::make_shared<llvm_value_t>(left->value, llvm::PointerType::get(*context, 0), true);
+  }
+  case ast_node_t::eArrayAccess: {
+    auto value = visit_node(expr->value);
+    // Address of implies that we need return something that shouldnt
+    // be able to be `load'ed any further, therefore is_rvalue = true.
+    return std::make_shared<llvm_value_t>(value->value, value->type, true);
   }
   case ast_node_t::eDeref: {
     auto result = visit_node(node->as.deref_expr->value);
@@ -574,7 +591,7 @@ VISITOR(function_impl) {
     auto &param = impl->declaration.parameters[i];
     auto ty = ensure_type(param.resolved_type);
     auto llvm_value = func->args().begin() + i;
-    scope()->set(param.name, std::make_shared<llvm_value_t>(llvm_value, ty, true));
+    scope()->set(param.name, std::make_shared<llvm_value_t>(llvm_value, ty, true, param.resolved_type));
   }
 
   auto result = visit_node(impl->block);
@@ -678,7 +695,7 @@ VISITOR(literal) {
   llvm::Value *value = nullptr;
   switch (expr->type) {
   case literal_type_t::eInteger: {
-    // TODO: Can't handle uint64_t
+    // TODO: Can't handle uint64_t at max extent (above limits of int64_t)
     value = llvm::ConstantInt::get(type, std::stoll(expr->value));
     break;
   }
@@ -698,23 +715,19 @@ VISITOR(literal) {
     assert(false && "Internal Compiler Error: unsupported literal");
     break;
   }
-  return std::make_shared<llvm_value_t>(value, type, true);
+  return std::make_shared<llvm_value_t>(value, type, true, node->type);
 }
 
 SP<llvm_value_t>
 codegen_t::resolve_member(const llvm_value_t &val, const std::string &member) {
   try {
     llvm::Value *base_ptr = val.value;
-    auto base_type = llvm_type_cache.at(val.type);
+    auto base_type = val.base_type ? val.base_type : llvm_type_cache.at(val.type);
 
     // Auto deref pointers until we reach the base type.
     while (base_type->kind == type_kind_t::ePointer) {
       base_type = base_type->as.pointer->deref();
       base_ptr = builder->CreateLoad(ensure_type(base_type), base_ptr);
-    }
-
-    if (base_type->kind == type_kind_t::eContract) {
-      // Lookup the vtable for this thing.
     }
 
     llvm::Type *llvm_type = ensure_type(base_type);
@@ -784,9 +797,11 @@ VISITOR(symbol) {
     ufcs.segments.insert(ufcs.segments.begin(), symbol->path.segments.begin(), symbol->path.segments.end() - ufcs.segments.size());
 
     left = scope()->resolve(to_string(ufcs));
+    if (!left)  throw std::runtime_error{"Symbol not found in codegen?"};
     return left;
   }
 
+  throw std::runtime_error{"Symbol not found in codegen?"};
   return left;
 }
 
@@ -857,27 +872,32 @@ VISITOR(binop) {
   if (left_type->isIntOrPtrTy() && right_type->isIntOrPtrTy()) {
     // Figure out the bitsize of each type, we coalesce to the biggest
     // variant.
-    if (left_type->getIntegerBitWidth() > right_type->getIntegerBitWidth())
+    SP<type_t> int_result_type;
+    if (left_type->getIntegerBitWidth() > right_type->getIntegerBitWidth()) {
       result_type = left_type;
-    else
+      int_result_type = expr->left->type;
+    } else {
       result_type = right_type;
+      int_result_type = expr->right->type;
+    }
+
+    if (left_type != result_type) {
+      left = std::make_shared<llvm_value_t>(builder->CreateIntCast(load(left_type, *left).value, result_type, int_result_type->is_signed()), result_type, true, int_result_type);
+      left_type = result_type;
+    }
+
+    if (right_type != result_type) {
+      right = std::make_shared<llvm_value_t>(builder->CreateIntCast(load(right_type, *right).value, result_type, int_result_type->is_signed()), result_type, true, int_result_type);
+      right_type = result_type;
+    }
 
     if (is_scalar_binop(expr->op)) {
-      if (left_type != result_type) {
-        left = std::make_shared<llvm_value_t>(builder->CreateIntCast(load(left_type, *left).value, result_type, true), result_type, true);
-        left_type = result_type;
-      }
-
-      if (right_type != result_type) {
-        right = std::make_shared<llvm_value_t>(builder->CreateIntCast(load(right_type, *right).value, result_type, true), result_type, true);
-        right_type = result_type;
-      }
-
       auto intermediate = builder->CreateBinOp(map_binop_type(left_type, right_type, expr->op), load(left_type, *left).value, load(right_type, *right).value);
-      return std::make_shared<llvm_value_t>(builder->CreateZExtOrTrunc(intermediate, result_type), result_type, true);
+      return std::make_shared<llvm_value_t>(builder->CreateIntCast(intermediate, result_type, int_result_type->is_signed()), result_type, true, int_result_type);
     } else {
-      // Probably comparision
+      // Comparision
       bool is_float = left_type->isFloatingPointTy() || right_type->isFloatingPointTy();
+      bool use_signed_cmp = expr->left->type->is_signed() || expr->right->type->is_signed();
       llvm::Value *value = nullptr;
 
       using P = llvm::CmpInst::Predicate;
@@ -892,19 +912,19 @@ VISITOR(binop) {
         break;
 
       case binop_type_t::eGT:
-        inst = is_float ? P::FCMP_OGT : P::ICMP_SGT;
+        inst = is_float ? P::FCMP_OGT : use_signed_cmp ? P::ICMP_SGT : P::ICMP_UGT;
         break;
 
       case binop_type_t::eLT:
-        inst = is_float ? P::FCMP_OLT : P::ICMP_SLT;
+        inst = is_float ? P::FCMP_OLT : use_signed_cmp ? P::ICMP_SLT : P::ICMP_ULT;
         break;
 
       case binop_type_t::eGTE:
-        inst = is_float ? P::FCMP_OGE : P::ICMP_SGE;
+        inst = is_float ? P::FCMP_OGE : use_signed_cmp ? P::ICMP_SGE : P::ICMP_UGE;
         break;
 
       case binop_type_t::eLTE:
-        inst = is_float ? P::FCMP_OLE : P::ICMP_SLE;
+        inst = is_float ? P::FCMP_OLE : use_signed_cmp ? P::ICMP_SLE : P::ICMP_ULE;
         break;
 
       default:
@@ -912,7 +932,7 @@ VISITOR(binop) {
         break;
       }
 
-      return std::make_shared<llvm_value_t>(builder->CreateICmp(inst, load(left_type, *left).value, load(right_type, *right).value), result_type, true);
+      return std::make_shared<llvm_value_t>(builder->CreateICmp(inst, load(left_type, *left).value, load(right_type, *right).value), builder->getIntNTy(1), true);
     }
   }
   throw std::runtime_error ("Internal Compiler Error: Unhandled types in binary operation.");
@@ -925,14 +945,22 @@ VISITOR(array_access) {
   auto base_val = visit_node(expr->value);
   auto offset_val = visit_node(expr->offset);
 
-  llvm::Value* base = base_val->value;
+  llvm::Value* base = load(base_val).value;
   llvm::Value* offset = load(builder->getInt32Ty(), *offset_val).value;
 
-  auto element_type = expr->value->type->base_type();
+  auto element_type = ensure_type(expr->value->type->base_type());
 
-  llvm::Value* address = builder->CreateGEP(ensure_type(element_type), base, {offset}, "array_idx");
+  llvm::Value* address = builder->CreateGEP(element_type, base, {offset}, "array_idx");
 
-  return std::make_shared<llvm_value_t>(load(ensure_type(element_type), llvm_value_t(address, ensure_type(pointer_t::pointer_to(pointer_kind_t::eNonNullable, element_type, true)), false)));
+  return std::make_shared<llvm_value_t>(address, element_type, false);
+}
+
+VISITOR(deref) {
+  deref_expr_t *expr = node->as.deref_expr;
+
+  auto value = visit_node(expr->value);
+
+  return std::make_shared<llvm_value_t>(builder->CreateLoad(value->type, value->value), value->type, true);
 }
 
 VISITOR(for) {
@@ -1091,6 +1119,14 @@ VISITOR(unary) {
 
   auto value = visit_node(expr->value);
 
+  if (expr->op == token_type_t::operatorMinus) {
+    if (value->type->isIntegerTy())
+      return std::make_shared<llvm_value_t>(
+          builder->CreateNeg(load(value).value, "int_neg"), value->type, true);
+    else
+      return std::make_shared<llvm_value_t>(builder->CreateFNeg(load(value).value, "float_neg"), value->type, true);
+  }
+
   // ! (negate)
   if (expr->op == token_type_t::operatorExclamation) {
     return std::make_shared<llvm_value_t>(builder->CreateNot(load(value).value, "bool_not"), value->type, true);
@@ -1132,7 +1168,7 @@ llvm::Value *codegen_t::contract_emit_static_vtable(SP<type_t> contract_ty, SP<t
     elements.push_back(llvm::dyn_cast<llvm::Function>(scope()->resolve(to_string(implementor) + "." + it->first)->value));
   }
 
-  auto *vtable_init = llvm::ConstantStruct::getAnon(*context, elements);
+  auto *vtable_init = llvm::ConstantStruct::getAnon(*context, elements, true);
 
   // 2. It doesn't exist, so create it
   return new llvm::GlobalVariable(
@@ -1323,6 +1359,10 @@ codegen_t::visit_node(SP<ast_node_t> node) {
 
   case ast_node_t::eIf:
     result = visit_if(node);
+    break;
+
+  case ast_node_t::eDeref:
+    result = visit_deref(node);
     break;
 
   default:
