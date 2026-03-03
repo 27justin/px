@@ -130,7 +130,8 @@ ast_node_t::ast_node_t(const ast_node_t &other) {
   case eIf:
     as.if_stmt->condition = std::make_shared<ast_node_t>(*other.as.if_stmt->condition);
     as.if_stmt->pass = std::make_shared<ast_node_t>(*other.as.if_stmt->pass);
-    as.if_stmt->reject = std::make_shared<ast_node_t>(*other.as.if_stmt->reject);
+    if (other.as.if_stmt->reject)
+      as.if_stmt->reject = std::make_shared<ast_node_t>(*other.as.if_stmt->reject);
     break;
   case eCast:
     as.cast->value = std::make_shared<ast_node_t>(*other.as.cast->value);

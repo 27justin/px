@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(jc CXX)
+project(px CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 
-add_executable(jcc
+add_executable(pxc
   src/frontend/source.cpp
   src/frontend/diagnostic.cpp
   src/frontend/token.cpp
@@ -20,7 +20,8 @@ add_executable(jcc
   src/backend/codegen.cpp
   src/frontend/compiler.cpp)
 
-target_include_directories(jcc PUBLIC include)
+target_include_directories(pxc PRIVATE third_party)
+target_include_directories(pxc PRIVATE include)
 
 # =======
 #   LLVM
@@ -34,6 +35,5 @@ include_directories(${LLVM_INCLUDE_DIRS})
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
 
-
 # Link against LLVM libraries
-target_link_libraries(jcc LLVM)
+target_link_libraries(pxc LLVM)

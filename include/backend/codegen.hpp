@@ -34,15 +34,19 @@ struct codegen_t {
   std::unique_ptr<llvm::Module> module;
   std::unique_ptr<llvm::IRBuilder<>> builder;
 
-  codegen_t(semantic_info_t &&su);
+  codegen_t(std::shared_ptr<source_t> source, semantic_info_t &&su);
 
   void generate();
-  void compile_to_object(const std::string &filename);
+
+  std::string compile_to_object (std::optional<std::string> filename);
+  void compile_to_llvm_ir(std::optional<std::string> filename);
+
 private:
   semantic_info_t info;
   std::map<llvm::Type *, SP<type_t>> llvm_type_cache;
   std::map<SP<type_t>, llvm::Type *> type_llvm_cache;
   std::vector<SP<llvm_scope_t>> scopes;
+  std::shared_ptr<source_t> source;
 
   SP<llvm_scope_t> scope();
 
@@ -97,6 +101,8 @@ private:
   VISITOR(assignment);
   VISITOR(cast);
   VISITOR(struct_initializer);
+  VISITOR(nil);
+  VISITOR(if);
   VISITOR(function_decl);
   VISITOR(function_impl);
 

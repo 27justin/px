@@ -33,6 +33,8 @@ struct analyzer_t {
   analyze(translation_unit_t tu);
 
   analyzer_t(std::shared_ptr<source_t> src) : source(src) {};
+
+  void set_include_directories(const std::vector<std::string> &);
 private:
   using string_list = std::vector<std::string>;
 
@@ -141,4 +143,6 @@ private:
   N expand(const std::string &v);
 
   specialized_path_t resolve_path(const specialized_path_t&);
+
+  string_list include_directories;
 };

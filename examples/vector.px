@@ -1,9 +1,11 @@
 import std.vector
 
 main := fn () -> i32 {
-  let vec: std.vector<i32> = std.vector<i32>.init();
+  let allocator := std.allocator.heap.init();
+
+  let vec: std.vector<i32> = std.vector<i32>.init(allocator as std.allocator);
   let i: i32 = 99;
-  vec.push(move i);
+  vec.push(i);
   0
 }
 

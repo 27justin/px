@@ -25,6 +25,8 @@
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Passes/PassBuilder.h>
+
+#include <llvm/Support/Program.h>
 #include <llvm/Support/FileSystem.h>
 
 #include <memory>
@@ -82,38 +84,43 @@ codegen_t::init_target() {
   module->setDataLayout(target_machine->createDataLayout());
 }
 
-void codegen_t::compile_to_object(const std::string &filename) {
+std::string codegen_t::compile_to_object(std::optional<std::string> filename) {
   std::error_code EC;
 
-  auto ir_file = std::filesystem::path(filename)
-                     .filename()
-                     .replace_extension(".ll")
-                     .string();
-
-  auto obj_file = std::filesystem::path(filename)
-                     .filename()
+  auto obj_file = std::filesystem::path(filename.value_or(std::string(source->name())))
                      .replace_extension(".o")
                      .string();
 
-  if (true) {
-    llvm::raw_fd_ostream ir_dest(ir_file, EC, llvm::sys::fs::OF_None);
-    module->print(ir_dest, nullptr);
-    module->print(llvm::outs(), nullptr);
-  }
-
-  llvm::raw_fd_ostream obj_dest(obj_file, EC, llvm::sys::fs::OF_None);
   llvm::legacy::PassManager pass;
   auto file_type = llvm::CodeGenFileType::ObjectFile;
 
-  if (target_machine->addPassesToEmitFile(pass, obj_dest, nullptr, file_type)) {
-    throw std::runtime_error("Target Machine can't emit object file.");
+  if (filename == "-") {
+    target_machine->addPassesToEmitFile(pass, llvm::outs(), nullptr, file_type);
+    pass.run(*module);
+  } else {
+    llvm::raw_fd_ostream obj_dest(obj_file, EC, llvm::sys::fs::OF_None);
+    if (target_machine->addPassesToEmitFile(pass, obj_dest, nullptr, file_type)) {
+      throw std::runtime_error("Target Machine can't emit object file.");
+    }
+    pass.run(*module);
+    obj_dest.flush();
   }
-
-  pass.run(*module);
-  obj_dest.flush();
+  return obj_file;
 }
 
-codegen_t::codegen_t(semantic_info_t &&s) : info(std::move(s)) {
+void codegen_t::compile_to_llvm_ir(std::optional<std::string> filename) {
+  std::error_code EC;
+
+  if (filename == "-") {
+    module->print(llvm::outs(), nullptr);
+  } else {
+    llvm::raw_fd_ostream ir_dest(filename.value_or(std::filesystem::path(source->name()).replace_extension(".ll").filename().string()), EC, llvm::sys::fs::OF_None);
+    module->print(ir_dest, nullptr);
+  }
+}
+
+
+codegen_t::codegen_t(std::shared_ptr<source_t> src, semantic_info_t &&s) : source(src), info(std::move(s)) {
   context = std::make_unique<llvm::LLVMContext>();
   module = std::make_unique<llvm::Module>("jcc_module", *context);
   builder = std::make_unique<llvm::IRBuilder<>>(*context);
@@ -172,14 +179,22 @@ void codegen_t::contract_emit_dynamic_dispatcher(SP<type_t> contract,
                                                  SP<type_t> requirement_type) {
 
   auto llvm_type = ensure_type(requirement_type);
-  llvm::FunctionType *llvm_fn = llvm::dyn_cast<llvm::FunctionType>(llvm_type);
+  llvm::FunctionType *receiver_fn = llvm::dyn_cast<llvm::FunctionType>(llvm_type);
+
+  std::vector<llvm::Type *> params;
+  params.push_back(llvm::StructType::getTypeByName(*context, "contract"));
+  for (auto i = 1; i < receiver_fn->getNumParams(); ++i) {
+    params.push_back(receiver_fn->getParamType(i));
+  }
+
+  llvm::FunctionType *dispatcher_fn = llvm::FunctionType::get(receiver_fn->getReturnType(), params, receiver_fn->isVarArg());
 
   function_signature_t *signature = requirement_type->as.function;
 
   specialized_path_t dispatcher_path {contract->name.segments};
   dispatcher_path.segments.push_back(symbol_name);
 
-  auto func = llvm::Function::Create(llvm_fn, llvm::GlobalValue::ExternalLinkage, to_string(dispatcher_path), *module);
+  auto func = llvm::Function::Create(dispatcher_fn, llvm::GlobalValue::ExternalLinkage, to_string(dispatcher_path), *module);
 
   llvm::BasicBlock *entry = llvm::BasicBlock::Create(*context, "entry", func);
 
@@ -210,14 +225,14 @@ void codegen_t::contract_emit_dynamic_dispatcher(SP<type_t> contract,
     args.push_back(it);
   }
 
-  auto ret_val = builder->CreateCall(llvm_fn, dyn_func, args, llvm_fn->getReturnType()->isVoidTy() ? "" : "vtable_dispatch");
+  auto ret_val = builder->CreateCall(dispatcher_fn, dyn_func, args, dispatcher_fn->getReturnType()->isVoidTy() ? "" : "vtable_dispatch");
 
-  if (llvm_fn->getReturnType()->isVoidTy() == false)
+  if (dispatcher_fn->getReturnType()->isVoidTy() == false)
     builder->CreateRet(ret_val);
   else
     builder->CreateRetVoid();
 
-  scope()->set(to_string(dispatcher_path), std::make_shared<llvm_value_t>(func, llvm_fn, true));
+  scope()->set(to_string(dispatcher_path), std::make_shared<llvm_value_t>(func, dispatcher_fn, true));
   builder->SetInsertPoint(current_block);
 }
 
@@ -273,12 +288,12 @@ llvm::Type *codegen_t::ensure_type(SP<type_t> type) {
     // pointer-size struct that holds both a pointer to the vtable,
     // and a pointer to whatever implements the contract.
 
-    if (!llvm::StructType::getTypeByName(*context, "contract")) {
+    if (result = llvm::StructType::getTypeByName(*context, "contract"); !result) {
       std::vector<llvm::Type *> types {llvm::PointerType::get(*context, 0), llvm::PointerType::get(*context, 0)};
-      llvm::StructType::create(types, "contract", true);
+      result = llvm::StructType::create(types, "contract", true);
     }
 
-    if (result = llvm::StructType::getTypeByName(*context, "contract." + to_string(type->name)); !result) {
+    if (!llvm::StructType::getTypeByName(*context, "contract." + to_string(type->name))) {
       std::vector<llvm::Type *> types;
       auto ptr_type = llvm::PointerType::get(*context, 0);
 
@@ -286,7 +301,7 @@ llvm::Type *codegen_t::ensure_type(SP<type_t> type) {
         types.push_back(ptr_type);
       }
 
-      result = llvm::StructType::create(types, "contract." + to_string(type->name), true);
+      llvm::StructType::create(types, "contract." + to_string(type->name), true);
 
       for (auto &[name, req] : type->as.contract->requirements) {
         // Create dynamic dispatch function
@@ -397,16 +412,16 @@ llvm::Value *
 codegen_t::decay_contract_to_data(llvm::Value *value) {
   auto contract_type = llvm::StructType::getTypeByName(*context, "contract");
 
-  auto data_field_ptr = builder->CreateStructGEP(contract_type, value, 1, "data_field");
-  return builder->CreateLoad(llvm::PointerType::get(*context, 0), data_field_ptr, "data_ptr");
+  auto data_ptr = builder->CreateExtractValue(value, {1}, "data_field");
+  return data_ptr;
 }
 
 llvm::Value *
 codegen_t::decay_contract_to_vtable(llvm::Value *value) {
   auto contract_type = llvm::StructType::getTypeByName(*context, "contract");
 
-  auto vtable_field_ptr = builder->CreateStructGEP(contract_type, value, 0, "vtable_field");
-  return builder->CreateLoad(llvm::PointerType::get(*context, 0), vtable_field_ptr, "vtable_ptr");
+  auto vtable_ptr = builder->CreateExtractValue(value, {0}, "vtable_field");
+  return vtable_ptr;
 }
 
 uint32_t
@@ -582,17 +597,12 @@ VISITOR(call) {
   std::vector<llvm::Value *> args;
   for (auto &arg : call->arguments) {
     auto value = visit_node(arg);
-    args.push_back(load(ensure_type(arg->type), *value).value);
+    args.push_back(load(value).value);
   }
 
   if (call->implicit_receiver) {
     auto receiver = visit_node(call->implicit_receiver);
-    if (call->implicit_receiver->type->kind == type_kind_t::eContract) {
-      // Decay the contract into just the data pointer.
-      args.insert(args.begin(), visit_node(call->implicit_receiver)->value);
-    } else {
-      args.insert(args.begin(), load(ensure_type(call->implicit_receiver->type), *receiver).value);
-    }
+    args.insert(args.begin(), load(receiver).value);
   }
 
   auto callee = visit_node(call->callee);
@@ -1162,12 +1172,50 @@ VISITOR(cast) {
     builder->CreateStore(static_vtable, field_vtable_ptr);
     builder->CreateStore(value->value, field_data_ptr);
 
-    // The resulting fat pointer is an rvalue, we can't load it, as
-    // that would instead load the vtable.
-    return std::make_shared<llvm_value_t>(contract_ptr, generic_contract_type, true);
+    // The resulting fat pointer is an lvalue (duh.. you alloca'd), we
+    // have to load it, to be able to retrieve the vtable & data.
+    return std::make_shared<llvm_value_t>(contract_ptr, generic_contract_type, false);
   }
 
   return value;
+}
+
+VISITOR(nil) {
+  llvm::PointerType* ptr_ty = llvm::PointerType::get(*context, 0);
+  llvm::Value* nil_ptr = llvm::ConstantPointerNull::get(ptr_ty);
+  return std::make_shared<llvm_value_t>(nil_ptr, ptr_ty, true);
+}
+
+VISITOR(if) {
+    if_stmt_t *stmt = node->as.if_stmt;
+    llvm::Function *func = builder->GetInsertBlock()->getParent();
+
+    // 1. Create blocks and immediately attach them to the function
+    llvm::BasicBlock *pass_bb = llvm::BasicBlock::Create(*context, "if.pass", func);
+    llvm::BasicBlock *reject_bb = llvm::BasicBlock::Create(*context, "if.reject", func);
+    llvm::BasicBlock *merge_bb = llvm::BasicBlock::Create(*context, "if.merge", func);
+
+    auto cond_val = load(visit_node(stmt->condition)).value;
+    builder->CreateCondBr(cond_val, pass_bb, reject_bb);
+
+    builder->SetInsertPoint(pass_bb);
+    visit_node(stmt->pass);
+
+    // Only jump if the block has no terminator (return, jump, etc.)
+    if (!builder->GetInsertBlock()->getTerminator()) {
+        builder->CreateBr(merge_bb);
+    }
+
+    builder->SetInsertPoint(reject_bb);
+    if (stmt->reject) {
+        visit_node(stmt->reject);
+    }
+    if (!builder->GetInsertBlock()->getTerminator()) {
+        builder->CreateBr(merge_bb);
+    }
+
+    builder->SetInsertPoint(merge_bb);
+    return nullptr;
 }
 
 SP<llvm_value_t>
@@ -1267,6 +1315,14 @@ codegen_t::visit_node(SP<ast_node_t> node) {
 
   case ast_node_t::eCast:
     result = visit_cast(node);
+    break;
+
+  case ast_node_t::eNil:
+    result = visit_nil(node);
+    break;
+
+  case ast_node_t::eIf:
+    result = visit_if(node);
     break;
 
   default:

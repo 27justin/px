@@ -24,6 +24,8 @@ void A::import_source_file(const std::string &path) {
     parser_t parser(lexer, src);
     analyzer_t analyzer(src);
 
+    analyzer.set_include_directories(include_directories);
+
     semantic_info_t info = analyzer.analyze(parser.parse());
     scope_stack.front()->merge(*info.scope);
 
@@ -41,6 +43,10 @@ void A::import_source_file(const std::string &path) {
   }
 }
 
+void A::set_include_directories(const std::vector<std::string> &dirs) {
+  include_directories = dirs;
+}
+
 semantic_info_t
 A::analyze(translation_unit_t tu) {
   push_scope();
@@ -50,10 +56,9 @@ A::analyze(translation_unit_t tu) {
     });
 
   // First resolve all imports
-  std::vector<std::string> import_search_paths {"../lib"};
   for (auto &import_ : info->unit.imports) {
     bool found = false;
-    for (auto &search_path : import_search_paths) {
+    for (auto &search_path : include_directories) {
       auto relative_disk_path = to_string(import_);
       size_t pos = relative_disk_path.find(".");
       while (pos != std::string::npos) {
@@ -434,7 +439,18 @@ A::analyze_call(N node) {
 
     call->implicit_receiver = make_node<symbol_expr_t>(ast_node_t::eSymbol, {specialized_path_t{call->callee->as.symbol->path.segments.front().name}}, node->location, node->source);
 
-    if (signature->receiver->kind == type_kind_t::ePointer) {
+    // Automatically add a `&` if the receiver is a pointer and NOT a self
+    // placeholder.
+    //
+    // TODO: This is a crutch for an issue that pertains to just the
+    // codegen backend.
+    //
+    // The dynamic dispatchers within the codegen get passed the
+    // contract by-value rather than by-ref, therefore adding this
+    // `addr_of_expr_t` breaks our ABI, by passing a pointer where a
+    // contract value is expected.
+    if (signature->receiver->kind == type_kind_t::ePointer &&
+        signature->receiver->base_type()->kind != type_kind_t::eSelf) {
       call->implicit_receiver = make_node<addr_of_expr_t>(ast_node_t::eAddrOf, {call->implicit_receiver}, node->location, node->source);
     }
 
@@ -674,6 +690,8 @@ A::analyze_symbol(N node) {
     if (sym->type->kind == type_kind_t::eEnum) {
       return resolve_enum_element(sym->type, path.segments.back().name);
     }
+
+    return sym->type;
   }
 
   diagnostics.messages.emplace_back(error(source, node->location, "Unknown symbol", fmt("Symbol `{}` is not known in the current scope.", to_string(path))));

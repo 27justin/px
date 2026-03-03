@@ -124,7 +124,7 @@ SP<type_t> type_registry_t::add_struct(const specialized_path_t &name,
 SP<type_t>
 type_registry_t::add_contract(const specialized_path_t &name, const std::map<std::string, SP<type_t>> &requirements) {
   auto type = std::make_shared<type_t>();
-  type->size = (1 + requirements.size() * sizeof(void*)) * 8;
+  type->size = (2 * sizeof(void*)) * 8;
   type->alignment = 8;
 
   type->kind = type_kind_t::eContract;
