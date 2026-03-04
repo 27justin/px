@@ -142,7 +142,7 @@ void codegen_t::link_external_symbol(const std::string &name, SP<type_t> type) {
 
         func->setLinkage(llvm::GlobalValue::ExternalLinkage);
 
-        auto value = std::make_shared<llvm_value_t>(func, llvm_type, false);
+        auto value = std::make_shared<llvm_value_t>(func, llvm_type, false, type);
         scope()->set(name, value);
         break;
     }
@@ -156,7 +156,7 @@ void codegen_t::link_external_symbol(const std::string &name, SP<type_t> type) {
             name
         );
 
-        auto value = std::make_shared<llvm_value_t>(variable, llvm_type, true);
+        auto value = std::make_shared<llvm_value_t>(variable, llvm_type, true, type);
         scope()->set(name, value);
         break;
     }
@@ -389,7 +389,7 @@ codegen_t::load(llvm::Type *type, const llvm_value_t &val) {
 
     // If it's a pointer (like an alloca), we need the value inside
     if (!val.is_rvalue) {
-      return llvm_value_t {builder->CreateLoad(type, val.value), type, true};
+      return llvm_value_t {builder->CreateLoad(type, val.value), type, true, val.base_type};
     }
     return val;
 }
@@ -405,18 +405,42 @@ codegen_t::load(const llvm_value_t &value) {
 }
 
 llvm_value_t
-codegen_t::cast(llvm::Type *type, const llvm_value_t &value) {
-  if (type->isIntegerTy() && value.type->isIntegerTy()) {
-    return llvm_value_t{builder->CreateZExtOrTrunc(load(value).value, type),
-                        type, true};
+codegen_t::cast(SP<type_t> type, const llvm_value_t &value) {
+  llvm::Type *target_type = ensure_type(type);
+
+  if (target_type->isIntegerTy() && value.type->isIntegerTy()) {
+    // Int cast
+    return llvm_value_t(builder->CreateIntCast(load(value).value, target_type, type->is_signed()), target_type, true);
   }
 
-  if ((value.type->isPointerTy() && type->isIntegerTy()) ||
-      (value.type->isIntegerTy() && type->isPointerTy())) {
-    return llvm_value_t{builder->CreateBitOrPointerCast(value.value, type), type, true};
+  if (type->kind == type_kind_t::eContract) {
+    // Create the contract object
+    auto generic_contract_type = llvm::StructType::getTypeByName(*context, "contract");
+    auto constrained_contract_type = llvm::StructType::getTypeByName(*context, "contract." + to_string(value.base_type->name));
+
+    auto static_vtable = contract_emit_static_vtable(type, value.base_type);
+
+    auto contract_ptr = builder->CreateAlloca(generic_contract_type, nullptr, "contract");
+
+    auto field_vtable_ptr = builder->CreateStructGEP(
+        generic_contract_type, contract_ptr, 0, "vtable_field");
+    auto field_data_ptr = builder->CreateStructGEP(generic_contract_type, contract_ptr, 1, "data_field");
+
+    builder->CreateStore(static_vtable, field_vtable_ptr);
+    builder->CreateStore(value.value, field_data_ptr);
+
+    // The resulting fat pointer is an lvalue (duh.. you alloca'd), we
+    // have to load it, to be able to retrieve the vtable & data.
+    return llvm_value_t(contract_ptr, generic_contract_type, false);
   }
 
-  throw std::runtime_error ("Unhandled cast");
+  // Casting from known size array into runtime slice.
+  if (value.type->isArrayTy() &&
+      type->kind == type_kind_t::eSlice) {
+    return slice_create_from_array(load(value));
+  }
+
+  return value;
 }
 
 llvm::Value *
@@ -454,6 +478,9 @@ codegen_t::field_index(llvm::Type *ty, const std::string &name) {
     auto member = tuple_layout->element(name);
     return std::distance(tuple_layout->elements.cbegin(), member);
   }
+  case type_kind_t::eSlice: {
+    return name == "data" ? 0 : 1;
+  }
   default:
     throw std::runtime_error("Unknown type in field_index");
   }
@@ -487,7 +514,11 @@ codegen_t::address_of(SP<ast_node_t> node) {
     }
 
     //assert(left->is_rvalue == false && left->type->isPointerTy() == false);
-    return std::make_shared<llvm_value_t>(left->value, llvm::PointerType::get(*context, 0), true);
+    // return std::make_shared<llvm_value_t>(
+        // left->value, llvm::PointerType::get(*context, 0), true);
+    return std::make_shared<llvm_value_t>(left->value,
+                                          llvm::PointerType::get(*context, 0),
+                                          true, pointer_t::pointer_to(pointer_kind_t::eNonNullable, left->base_type));
   }
   case ast_node_t::eArrayAccess: {
     auto value = visit_node(expr->value);
@@ -505,8 +536,27 @@ codegen_t::address_of(SP<ast_node_t> node) {
   return nullptr;
 }
 
-SP<llvm_value_t>
-codegen_t::visit_binding(SP<ast_node_t> node) {
+llvm_value_t
+codegen_t::slice_create_from_array(const llvm_value_t &stack_array) {
+  assert(stack_array.base_type->kind == type_kind_t::eArray);
+  auto arr = llvm::dyn_cast<llvm::ArrayType>(stack_array.type);
+
+  // TODO: is_mutable: false?
+  auto slice_type = type_t::make_slice(stack_array.base_type->as.array->element_type, false);
+  auto llvm_slice_type = ensure_type(slice_type);
+
+  // Slices are basically named tuples (data: ?T, size: u64).
+  //
+  // Since they are small, pass them around by-value instead of as stack objects.
+  llvm::Value *slice = llvm::ConstantAggregateZero::get(llvm_slice_type);
+
+  slice = builder->CreateInsertValue(slice, stack_array.value, {0}, "slice.data");
+  slice = builder->CreateInsertValue(slice, llvm::ConstantInt::get(builder->getInt64Ty(), arr->getNumElements()), {1}, "slice.size");
+
+  return llvm_value_t (slice, llvm_slice_type, true, slice_type);
+}
+
+VISITOR(binding) {
   binding_decl_t *decl = node->as.binding_decl;
   current_binding = decl->name;
   return scope()->set(to_string(decl->name), visit_node(decl->value));
@@ -611,10 +661,22 @@ VISITOR(call) {
 
   llvm::FunctionType *func = llvm::dyn_cast<llvm::FunctionType>(ensure_type(call->callee->type));
 
+  auto signature = call->callee->type->as.function;
+
   std::vector<llvm::Value *> args;
+  int64_t nparam = 0;
   for (auto &arg : call->arguments) {
     auto value = visit_node(arg);
+
+    if (nparam < signature->arg_types.size()) {
+      auto param_type = signature->arg_types[nparam];
+      if (param_type != arg->type) {
+        value = std::make_shared<llvm_value_t>(cast(param_type, *value));
+      }
+    }
+
     args.push_back(load(value).value);
+    nparam++;
   }
 
   if (call->implicit_receiver) {
@@ -668,7 +730,7 @@ VISITOR(declaration) {
       auto val = load(init);
 
       if (val.type != value_type) {
-        val = cast(value_type, val);
+        val = cast(node->type, val);
       }
 
       builder->CreateStore(val.value, storage);
@@ -685,7 +747,7 @@ VISITOR(declaration) {
     is_lvalue = false;
   }
 
-  return scopes.back()->set(decl->identifier, std::make_shared<llvm_value_t>(storage, value_type, !is_lvalue));
+  return scopes.back()->set(decl->identifier, std::make_shared<llvm_value_t>(storage, value_type, !is_lvalue, node->type));
 }
 
 VISITOR(literal) {
@@ -737,10 +799,18 @@ codegen_t::resolve_member(const llvm_value_t &val, const std::string &member) {
       throw std::runtime_error("Member " + member + " not found on struct");
     }
 
-    llvm::Value* member_ptr = builder->CreateStructGEP(llvm_type, val.value, field_idx, member);
-    llvm::Type* member_type = llvm::cast<llvm::StructType>(llvm_type)->getElementType(field_idx);
+    llvm::Value *member_data {nullptr};
+    llvm::Type *member_type = llvm::cast<llvm::StructType>(llvm_type)->getElementType(field_idx);
+    bool is_rvalue = false;
 
-    return std::make_shared<llvm_value_t>(member_ptr, member_type, false);
+    if (ensure_type(val.base_type)->isPointerTy()) {
+      member_data = builder->CreateStructGEP(llvm_type, val.value, field_idx, member);
+    } else {
+      member_data = builder->CreateExtractValue(val.value, field_idx, member);
+      is_rvalue = true;
+    }
+
+    return std::make_shared<llvm_value_t>(member_data, member_type, is_rvalue);
   } catch (...) {
     return nullptr;
   }
@@ -984,7 +1054,7 @@ VISITOR(for) {
     if (stmt->condition && stmt->condition->kind == ast_node_t::eRangeExpr) {
         auto* range = stmt->condition->as.range_expr;
 
-        llvm::Value* max = cast(init->type, load(visit_node(range->max))).value;
+        llvm::Value* max = cast(init->base_type, load(visit_node(range->max))).value;
 
         // Condition: iter < max (or <= if inclusive)
         llvm::Value* cmp;
@@ -1183,37 +1253,7 @@ llvm::Value *codegen_t::contract_emit_static_vtable(SP<type_t> contract_ty, SP<t
 
 VISITOR(cast) {
   cast_expr_t *expr = node->as.cast;
-
-  auto value = visit_node(expr->value);
-  llvm::Type *target_type = ensure_type(node->type);
-
-  if (target_type->isIntegerTy() && value->type->isIntegerTy()) {
-    // Int cast
-    return std::make_shared<llvm_value_t>(builder->CreateIntCast(load(value).value, target_type, to_string(expr->type.name).substr(0, 1) == "i"), target_type, true);
-  }
-
-  if (node->type->kind == type_kind_t::eContract) {
-    // Create the contract object
-    auto generic_contract_type = llvm::StructType::getTypeByName(*context, "contract");
-    auto constrained_contract_type = llvm::StructType::getTypeByName(*context, "contract." + to_string(expr->value->type->name));
-
-    auto static_vtable = contract_emit_static_vtable(node->type, expr->value->type);
-
-    auto contract_ptr = builder->CreateAlloca(generic_contract_type, nullptr, "contract");
-
-    auto field_vtable_ptr = builder->CreateStructGEP(
-        generic_contract_type, contract_ptr, 0, "vtable_field");
-    auto field_data_ptr = builder->CreateStructGEP(generic_contract_type, contract_ptr, 1, "data_field");
-
-    builder->CreateStore(static_vtable, field_vtable_ptr);
-    builder->CreateStore(value->value, field_data_ptr);
-
-    // The resulting fat pointer is an lvalue (duh.. you alloca'd), we
-    // have to load it, to be able to retrieve the vtable & data.
-    return std::make_shared<llvm_value_t>(contract_ptr, generic_contract_type, false);
-  }
-
-  return value;
+  return std::make_shared<llvm_value_t>(cast(node->type, *visit_node(expr->value)));
 }
 
 VISITOR(nil) {

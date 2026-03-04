@@ -1,7 +1,11 @@
 import libc
 
+take := fn (a: []u8) {
+  libc.printf("%lli\n", a.size);
+}
+
 main := fn () -> i32 {
-  let full: i64 = -1;
-  libc.printf("%lli > 0: %i\n", full, full > 0);
+  let s: [16]u8 = uninitialized;
+  take(s);
   0
 }

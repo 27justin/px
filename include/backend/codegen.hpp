@@ -62,7 +62,9 @@ private:
   llvm_value_t load(SP<llvm_value_t> val);
   llvm_value_t load(const llvm_value_t &val);
 
-  llvm_value_t cast(llvm::Type *type, const llvm_value_t &);
+  //llvm_value_t cast(llvm::Type *type, const llvm_value_t &);
+  llvm_value_t cast(SP<type_t> type, const llvm_value_t &);
+  llvm_value_t slice_create_from_array(const llvm_value_t &stack_array);
 
   llvm::Instruction::BinaryOps map_binop_type(llvm::Type *, llvm::Type *, binop_type_t);
   bool is_scalar_binop(binop_type_t);
