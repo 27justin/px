@@ -19,10 +19,14 @@ main := fn () -> i32 {
   let alloc := std.allocator.heap.init();
 
   let v2: std.vector<[]u8> = std.vector<[]u8>.init(alloc as std.allocator);
+  defer v2.deinit();
+
   v2.push("Hello, world!");
   v2.push("This is PX-Lang.");
 
-  libc.printf("%s\n", v2.join("\n").data);
+  let s := v2.join("\n");
+  defer s.deinit();
+  libc.printf("%s\n", s.data);
   0
 }
 

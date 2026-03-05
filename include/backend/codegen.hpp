@@ -25,6 +25,10 @@ struct llvm_scope_t {
   std::map<std::string, SP<llvm_value_t>> symbol_map;
   SP<llvm_scope_t> parent;
 
+  llvm::Value *block_return_value = nullptr;
+  llvm::BasicBlock *exit_block = nullptr;
+  std::vector<SP<ast_node_t>> defer_stack;
+
   llvm_scope_t(SP<llvm_scope_t> parent) : parent(parent) {}
   SP<llvm_value_t> resolve(const std::string &);
   SP<llvm_value_t> set(const std::string &, const SP<llvm_value_t>);
@@ -111,6 +115,7 @@ private:
   VISITOR(deref);
   VISITOR(member_access);
   VISITOR(slice_expr);
+  VISITOR(defer);
   VISITOR(function_decl);
   VISITOR(function_impl);
 

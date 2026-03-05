@@ -341,8 +341,12 @@ A::analyze_block(N node) {
     last_type = analyze_node(v);
   }
 
-  block->resolved_return_type = last_type;
-  return block->has_implicit_return ? last_type : resolve_type("void");
+  if (block->has_implicit_return) {
+    block->resolved_return_type = ensure_concrete(last_type);
+    return block->resolved_return_type;
+  } else {
+    return resolve_type("void");
+  }
 }
 
 bool

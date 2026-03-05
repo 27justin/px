@@ -746,16 +746,50 @@ VISITOR(call) {
 VISITOR(block) {
   block_node_t *block = node->as.block;
 
-  SP<llvm_value_t> value {nullptr};
+  auto func = builder->GetInsertBlock()->getParent();
+  scopes.emplace_back(std::make_shared<llvm_scope_t>(scopes.back()));
+  auto scope = this->scope();
+  scope->exit_block = llvm::BasicBlock::Create(*context, "exit", func);
+  auto *continue_bb = llvm::BasicBlock::Create(*context, "after", func);
 
-  for (auto &v : block->body) {
-    value = visit_node(v);
+  SP<llvm_value_t> return_value {nullptr};
+  if (block->has_implicit_return) {
+    // If we do have an implicit return, we create an alloca for the type.
+    auto return_type = ensure_type(block->resolved_return_type);
+    return_value = std::make_shared<llvm_value_t>(builder->CreateAlloca(return_type), return_type, false, block->resolved_return_type);
   }
 
-  if (block->has_implicit_return)
-    return std::make_shared<llvm_value_t>(load(value).value, value->type, true);
-  else
+  SP<llvm_value_t> last_value {nullptr};
+  for (auto &v : block->body) {
+    last_value = visit_node(v);
+
+    if (builder->GetInsertBlock()->getTerminator()) break;
+  }
+
+  if (block->has_implicit_return) {
+    // Set the local alloca
+    builder->CreateStore(load(last_value).value, return_value->value);
+  }
+
+  if (!builder->GetInsertBlock()->getTerminator()) {
+    builder->CreateBr(scope->exit_block);
+  }
+
+  builder->SetInsertPoint(scope->exit_block);
+  for (auto it = scope->defer_stack.rbegin(); it != scope->defer_stack.rend();
+       ++it) {
+    visit_node(*it);
+  }
+
+  builder->CreateBr(continue_bb);
+  scopes.pop_back();
+  builder->SetInsertPoint(continue_bb);
+
+  if (block->has_implicit_return) {
+    return std::make_shared<llvm_value_t>(load(return_value).value, ensure_type(block->resolved_return_type), false, block->resolved_return_type);
+  } else {
     return nullptr;
+  }
 }
 
 VISITOR(declaration) {
@@ -845,8 +879,15 @@ codegen_t::resolve_member(const llvm_value_t &val, const std::string &member) {
     current_val = builder->CreateLoad(ensure_type(current_type), current_val);
   }
 
-  bool is_ptr = (current_type->kind == type_kind_t::ePointer);
-  SP<type_t> struct_type = is_ptr ? current_type->as.pointer->deref() : current_type;
+  // Now we need to determine if the value is an lvalue (stack), or an
+  // rvalue (register).
+  // If it's a pointer, its always an lvalue, independant of the rvalue flag.
+  bool is_lvalue =
+      (current_type->kind == type_kind_t::ePointer || val.is_rvalue == false);
+
+  // If we are still one indirection away from the base struct type,
+  // deref that indirection.
+  SP<type_t> struct_type = current_type->kind == type_kind_t::ePointer ? current_type->as.pointer->deref() : current_type;
 
   llvm::Type *llvm_struct_type = ensure_type(struct_type);
   int field_idx = field_index(llvm_struct_type, member);
@@ -858,7 +899,7 @@ codegen_t::resolve_member(const llvm_value_t &val, const std::string &member) {
 
   SP<type_t> field_type = this->field_type(struct_type, member);
 
-  if (is_ptr) {
+  if (is_lvalue) {
     // We have a pointer to a something. Use GEP.
     // Result is the ADDRESS of the field (lvalue).
     member_data = builder->CreateStructGEP(llvm_struct_type, current_val, field_idx, member);
@@ -1377,6 +1418,16 @@ VISITOR(member_access) {
   // We return the actual value (is_rvalue = true)
   return resolve_member(*base, expr->member);
 }
+
+VISITOR(defer) {
+  defer_expr_t *expr = node->as.defer_expr;
+
+  auto current_scope = scope();
+  current_scope->defer_stack.emplace_back(expr->action);
+
+  return nullptr;
+}
+
 SP<llvm_value_t>
 codegen_t::visit_node(SP<ast_node_t> node) {
   if (!node->type) {
@@ -1494,6 +1545,10 @@ codegen_t::visit_node(SP<ast_node_t> node) {
 
   case ast_node_t::eSliceExpr:
     result = visit_slice_expr(node);
+    break;
+
+  case ast_node_t::eDefer:
+    result = visit_defer(node);
     break;
 
   default:
