@@ -397,6 +397,7 @@ struct slice_expr_t {
   type_decl_t type;
   SP<ast_node_t> pointer;
   SP<ast_node_t> size;
+  SP<type_t> resolved_type;
 };
 
 struct array_initialize_expr_t {

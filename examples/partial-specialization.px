@@ -3,7 +3,9 @@ import std.string
 import std.vector
 
 std.vector<[]u8>.join := fn (!self, separator: []u8) -> std.string {
-  var str: std.string = std.string.init("");
+  let alloc := std.allocator.heap.init();
+  var str: std.string = std.string.init(alloc as std.allocator);
+
   for i in 0..self.size() {
     str.append<[]u8>(self.at(i as i64).*);
     if i < self.size() - 1 {
@@ -14,11 +16,13 @@ std.vector<[]u8>.join := fn (!self, separator: []u8) -> std.string {
 }
 
 main := fn () -> i32 {
-  let v2: std.vector<[]u8> = std.vector<[]u8>.init();
+  let alloc := std.allocator.heap.init();
+
+  let v2: std.vector<[]u8> = std.vector<[]u8>.init(alloc as std.allocator);
   v2.push("Hello, world!");
   v2.push("This is PX-Lang.");
-  libc.printf("%s\n", v2.join("\n"));
 
+  libc.printf("%s\n", v2.join("\n").data);
   0
 }
 

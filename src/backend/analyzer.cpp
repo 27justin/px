@@ -494,9 +494,18 @@ A::analyze_literal(N node) {
     // If we have a type hint (from e.g. `let int: i32 = 1`), we know
     // that we are a i32, otherwise we make it untyped to resolve
     // later.
-    if (type_hint())
-      return type_hint();
-    else
+    if (type_hint()) {
+      // If the type hint is numeric, coerce to that.
+      if (type_hint()->is_numeric()) {
+        return type_hint();
+      } else {
+        // Otherwise return i32, or f32
+        if (literal->type == literal_type_t::eInteger)
+          return resolve_type("i32");
+        else
+          return resolve_type("f32");
+      }
+    } else
       return scope().types.untyped_literal(literal->value, literal->type);
   case literal_type_t::eBool:
     return resolve_type("bool");
@@ -612,7 +621,7 @@ A::resolve_member_access(QT base, const std::string &member_name) {
     auto element = base->kind == type_kind_t::eSlice ? base->as.slice->element_type : base->as.array->element_type;
     if (member_name == "size")
       return resolve_type("u64");
-    if (member_name == "ptr")
+    if (member_name == "data")
       return scope().types.pointer_to(element, {pointer_kind_t::eNonNullable},
                                       base->kind == type_kind_t::eSlice);
     break;
@@ -1387,6 +1396,8 @@ A::analyze_slice(N node) {
   QT size_type = analyze_node(slice->size);
   QT slice_base_type = resolve_type(slice->type);
 
+  slice->resolved_type = slice_base_type;
+
   if (pointer_type->kind != type_kind_t::ePointer) {
     diagnostics.messages.push_back(error(node->source, node->location, fmt("Invalid slice operation", "slice(type, pointer, size) takes a `{}` as a second argument, got `{}`", to_string(scope().types.pointer_to(slice_base_type, {pointer_kind_t::eNonNullable}, false)), to_string(pointer_type))));
     throw analyze_error_t{diagnostics};
@@ -1397,7 +1408,7 @@ A::analyze_slice(N node) {
     throw analyze_error_t{diagnostics};
   }
 
-  return scope().types.slice_of(pointer_type->as.pointer->base, false);
+  return scope().types.slice_of(slice_base_type, is_mutable(slice->pointer));
 }
 
 QT A::analyze_return(N node) {

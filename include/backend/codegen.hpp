@@ -62,9 +62,10 @@ private:
   llvm_value_t load(SP<llvm_value_t> val);
   llvm_value_t load(const llvm_value_t &val);
 
-  //llvm_value_t cast(llvm::Type *type, const llvm_value_t &);
   llvm_value_t cast(SP<type_t> type, const llvm_value_t &);
+
   llvm_value_t slice_create_from_array(const llvm_value_t &stack_array);
+  llvm_value_t slice_create_from_parts(SP<type_t>, const llvm_value_t &pointer, const llvm_value_t &size);
 
   llvm::Instruction::BinaryOps map_binop_type(llvm::Type *, llvm::Type *, binop_type_t);
   bool is_scalar_binop(binop_type_t);
@@ -75,6 +76,7 @@ private:
   SP<llvm_value_t> address_of(SP<ast_node_t> node);
 
   uint32_t field_index(llvm::Type *, const std::string &);
+  SP<type_t> field_type(SP<type_t>, const std::string &);
   SP<llvm_value_t> resolve_member(const llvm_value_t &, const std::string &);
   void link_external_symbol(const std::string &name, SP<type_t> type);
 
@@ -107,11 +109,14 @@ private:
   VISITOR(nil);
   VISITOR(if);
   VISITOR(deref);
+  VISITOR(member_access);
+  VISITOR(slice_expr);
   VISITOR(function_decl);
   VISITOR(function_impl);
 
   llvm::TargetMachine *target_machine;
   std::optional<specialized_path_t> current_binding;
+  std::optional<llvm::GlobalValue::LinkageTypes> current_linkage;
 
   std::optional<std::string> external_name; // For FFI
 };

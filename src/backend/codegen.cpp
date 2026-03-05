@@ -408,6 +408,9 @@ llvm_value_t
 codegen_t::cast(SP<type_t> type, const llvm_value_t &value) {
   llvm::Type *target_type = ensure_type(type);
 
+  if (value.base_type && *value.base_type == *type)
+    return value;
+
   if (target_type->isIntegerTy() && value.type->isIntegerTy()) {
     // Int cast
     return llvm_value_t(builder->CreateIntCast(load(value).value, target_type, type->is_signed()), target_type, true);
@@ -486,6 +489,31 @@ codegen_t::field_index(llvm::Type *ty, const std::string &name) {
   }
 }
 
+SP<type_t>
+codegen_t::field_type(SP<type_t> ty, const std::string &name) {
+  switch (ty->kind) {
+  case type_kind_t::ePointer: {
+    // Pointers automatically get dereferenced.
+    return field_type(ty->as.pointer->deref(), name);
+  }
+  case type_kind_t::eStruct: {
+    auto struct_layout = ty->as.struct_layout;
+    auto member = struct_layout->member(name);
+    return member->type;
+  }
+  case type_kind_t::eTuple: {
+    auto tuple_layout = ty->as.tuple;
+    auto member = tuple_layout->element(name);
+    return member->second;
+  }
+  case type_kind_t::eSlice: {
+    return name == "data" ? llvm_type_cache.at(llvm::PointerType::get(*context, 0)) : llvm_type_cache.at(builder->getIntNTy(64));
+  }
+  default:
+    throw std::runtime_error("Unknown type in field_index");
+  }
+}
+
 SP<llvm_value_t>
 codegen_t::address_of(SP<ast_node_t> node) {
   addr_of_expr_t *expr = node->as.addr_of;
@@ -542,7 +570,7 @@ codegen_t::slice_create_from_array(const llvm_value_t &stack_array) {
   auto arr = llvm::dyn_cast<llvm::ArrayType>(stack_array.type);
 
   // TODO: is_mutable: false?
-  auto slice_type = type_t::make_slice(stack_array.base_type->as.array->element_type, false);
+  auto slice_type = type_t::make_slice(stack_array.base_type->as.array->element_type, true);
   auto llvm_slice_type = ensure_type(slice_type);
 
   // Slices are basically named tuples (data: ?T, size: u64).
@@ -552,6 +580,23 @@ codegen_t::slice_create_from_array(const llvm_value_t &stack_array) {
 
   slice = builder->CreateInsertValue(slice, stack_array.value, {0}, "slice.data");
   slice = builder->CreateInsertValue(slice, llvm::ConstantInt::get(builder->getInt64Ty(), arr->getNumElements()), {1}, "slice.size");
+
+  return llvm_value_t (slice, llvm_slice_type, true, slice_type);
+}
+
+llvm_value_t
+codegen_t::slice_create_from_parts(SP<type_t> base_type, const llvm_value_t &pointer, const llvm_value_t &size) {
+  // TODO: is_mutable: false?
+  auto slice_type = type_t::make_slice(base_type, true);
+  auto llvm_slice_type = ensure_type(slice_type);
+
+  // Slices are basically named tuples (data: ?T, size: u64).
+  //
+  // Since they are small, pass them around by-value instead of as stack objects.
+  llvm::Value *slice = llvm::ConstantAggregateZero::get(llvm_slice_type);
+
+  slice = builder->CreateInsertValue(slice, load(pointer).value, {0}, "slice.data");
+  slice = builder->CreateInsertValue(slice, cast(llvm_type_cache.at(builder->getIntNTy(64)), size).value, {1}, "slice.size");
 
   return llvm_value_t (slice, llvm_slice_type, true, slice_type);
 }
@@ -626,7 +671,7 @@ VISITOR(function_impl) {
   auto llvm_type = ensure_type(node->type);
   llvm::FunctionType *llvm_fn = llvm::dyn_cast<llvm::FunctionType>(llvm_type);
 
-  auto func = llvm::Function::Create(llvm_fn, llvm::GlobalValue::ExternalLinkage, to_string(*current_binding), *module);
+  auto func = llvm::Function::Create(llvm_fn, current_linkage.value_or(llvm::GlobalValue::ExternalLinkage), to_string(*current_binding), *module);
   auto ret_val = scope()->set(to_string(*current_binding), std::make_shared<llvm_value_t>(func, llvm_fn, false));
 
   llvm::BasicBlock *entry = llvm::BasicBlock::Create(*context, "entry", func);
@@ -654,6 +699,14 @@ VISITOR(function_impl) {
   builder->SetInsertPoint(current_block);
   scopes.pop_back();
   return ret_val;
+}
+
+VISITOR(slice_expr) {
+  slice_expr_t *slice = node->as.slice_expr;
+
+  return std::make_shared<llvm_value_t>(
+    slice_create_from_parts(slice->resolved_type, *visit_node(slice->pointer), *visit_node(slice->size))
+    );
 }
 
 VISITOR(call) {
@@ -687,7 +740,7 @@ VISITOR(call) {
   auto callee = visit_node(call->callee);
   llvm::Value *value = builder->CreateCall(func, callee->value, args);
 
-  return std::make_shared<llvm_value_t>(value, func->getReturnType(), true);
+  return std::make_shared<llvm_value_t>(value, func->getReturnType(), true, signature->return_type);
 }
 
 VISITOR(block) {
@@ -782,38 +835,42 @@ VISITOR(literal) {
 
 SP<llvm_value_t>
 codegen_t::resolve_member(const llvm_value_t &val, const std::string &member) {
-  try {
-    llvm::Value *base_ptr = val.value;
-    auto base_type = val.base_type ? val.base_type : llvm_type_cache.at(val.type);
+  llvm::Value *current_val = val.value;
+  SP<type_t> current_type = val.base_type;
 
-    // Auto deref pointers until we reach the base type.
-    while (base_type->kind == type_kind_t::ePointer) {
-      base_type = base_type->as.pointer->deref();
-      base_ptr = builder->CreateLoad(ensure_type(base_type), base_ptr);
-    }
-
-    llvm::Type *llvm_type = ensure_type(base_type);
-
-    int field_idx = field_index(llvm_type, member);
-    if (field_idx == -1) {
-      throw std::runtime_error("Member " + member + " not found on struct");
-    }
-
-    llvm::Value *member_data {nullptr};
-    llvm::Type *member_type = llvm::cast<llvm::StructType>(llvm_type)->getElementType(field_idx);
-    bool is_rvalue = false;
-
-    if (ensure_type(val.base_type)->isPointerTy()) {
-      member_data = builder->CreateStructGEP(llvm_type, val.value, field_idx, member);
-    } else {
-      member_data = builder->CreateExtractValue(val.value, field_idx, member);
-      is_rvalue = true;
-    }
-
-    return std::make_shared<llvm_value_t>(member_data, member_type, is_rvalue);
-  } catch (...) {
-    return nullptr;
+  // Strip away nested pointer levels.
+  while (current_type->kind == type_kind_t::ePointer &&
+         current_type->as.pointer->deref()->kind == type_kind_t::ePointer) {
+    current_type = current_type->base_type();
+    current_val = builder->CreateLoad(ensure_type(current_type), current_val);
   }
+
+  bool is_ptr = (current_type->kind == type_kind_t::ePointer);
+  SP<type_t> struct_type = is_ptr ? current_type->as.pointer->deref() : current_type;
+
+  llvm::Type *llvm_struct_type = ensure_type(struct_type);
+  int field_idx = field_index(llvm_struct_type, member);
+
+  if (field_idx == -1) return nullptr;
+
+  llvm::Value *member_data;
+  bool result_is_rvalue;
+
+  SP<type_t> field_type = this->field_type(struct_type, member);
+
+  if (is_ptr) {
+    // We have a pointer to a something. Use GEP.
+    // Result is the ADDRESS of the field (lvalue).
+    member_data = builder->CreateStructGEP(llvm_struct_type, current_val, field_idx, member);
+    result_is_rvalue = false;
+  } else {
+    // We have the struct value in a register. Use ExtractValue.
+    // Result is the VALUE of the field (rvalue).
+    member_data = builder->CreateExtractValue(current_val, {(unsigned int)field_idx}, member);
+    result_is_rvalue = true;
+  }
+
+  return std::make_shared<llvm_value_t>(member_data, ensure_type(field_type), result_is_rvalue, field_type);
 }
 
 VISITOR(symbol) {
@@ -826,10 +883,18 @@ VISITOR(symbol) {
 
   // Template
   if (info.template_instantiations.contains(symbol->path)) {
+    if (auto sym = scope()->resolve(to_string(symbol->path)); sym) {
+      return sym;
+    }
+
     auto template_ = info.template_instantiations.at(symbol->path);
 
     current_binding = symbol->path;
+    current_linkage = llvm::GlobalValue::LinkOnceODRLinkage;
+
     visit_node(template_);
+
+    current_linkage = std::nullopt;
 
     return scope()->resolve(to_string(symbol->path));
   }
@@ -1016,7 +1081,7 @@ VISITOR(array_access) {
   auto offset_val = visit_node(expr->offset);
 
   llvm::Value* base = load(base_val).value;
-  llvm::Value* offset = load(builder->getInt32Ty(), *offset_val).value;
+  llvm::Value* offset = load(*offset_val).value;
 
   auto element_type = ensure_type(expr->value->type->base_type());
 
@@ -1029,8 +1094,9 @@ VISITOR(deref) {
   deref_expr_t *expr = node->as.deref_expr;
 
   auto value = visit_node(expr->value);
+  auto new_type = value->base_type->base_type();
 
-  return std::make_shared<llvm_value_t>(builder->CreateLoad(value->type, value->value), value->type, true);
+  return std::make_shared<llvm_value_t>(builder->CreateLoad(ensure_type(new_type), value->value), ensure_type(new_type), true, new_type);
 }
 
 VISITOR(for) {
@@ -1151,10 +1217,10 @@ VISITOR(struct_initializer) {
   for (auto const& [name, value_ast] : expr->values) {
     uint32_t nfield = field_index(struct_ty, name);
 
-    llvm::Value* field_ptr = builder->CreateStructGEP(struct_ty, struct_ptr, nfield);
+    llvm::Value* field_ptr = builder->CreateStructGEP(struct_ty, struct_ptr, nfield, name);
 
     auto val = visit_node(value_ast);
-    builder->CreateStore(load(val).value, field_ptr);
+    builder->CreateStore(cast(field_type(node->type, name), load(val)).value, field_ptr);
   }
 
   return std::make_shared<llvm_value_t>(struct_ptr, struct_ty);
@@ -1294,6 +1360,23 @@ VISITOR(if) {
     return nullptr;
 }
 
+VISITOR(member_access) {
+  member_access_expr_t *expr = node->as.member_access;
+
+  // 1. Visit the base object (e.g., `v2.at(0).*`)
+  auto base = visit_node(expr->object);
+
+  // 2. Ensure we are dealing with a struct/contract/slice
+  auto base_type = base->base_type;
+  if (base_type->kind != type_kind_t::eStruct &&
+      base_type->kind != type_kind_t::eSlice &&
+      base_type->kind != type_kind_t::eContract) {
+    throw std::runtime_error("Member access on non-aggregate type");
+  }
+
+  // We return the actual value (is_rvalue = true)
+  return resolve_member(*base, expr->member);
+}
 SP<llvm_value_t>
 codegen_t::visit_node(SP<ast_node_t> node) {
   if (!node->type) {
@@ -1403,6 +1486,14 @@ codegen_t::visit_node(SP<ast_node_t> node) {
 
   case ast_node_t::eDeref:
     result = visit_deref(node);
+    break;
+
+  case ast_node_t::eMemberAccess:
+    result = visit_member_access(node);
+    break;
+
+  case ast_node_t::eSliceExpr:
+    result = visit_slice_expr(node);
     break;
 
   default:

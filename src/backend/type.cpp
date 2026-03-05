@@ -174,7 +174,7 @@ pointer_t::deref() const {
 SP<type_t>
 type_t::make_slice(SP<type_t> base, bool is_mutable) {
   auto type = std::make_shared<type_t>();
-  type->size = sizeof(void*) + sizeof(size_t);
+  type->size = (sizeof(void*) + sizeof(uint64_t)) * sizeof(void*);
   type->alignment = sizeof(void*);
 
   slice_t *arr = new slice_t {};
@@ -188,8 +188,7 @@ type_t::make_slice(SP<type_t> base, bool is_mutable) {
   return type;
 }
 
-SP<type_t>
-type_t::base_type() {
+SP<type_t> type_t::base_type() {
   switch (kind) {
   case type_kind_t::eArray:
     return as.array->element_type;

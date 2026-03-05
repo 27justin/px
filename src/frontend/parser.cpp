@@ -734,6 +734,10 @@ P::parse_for() {
 
   // Parse the body
   for_stmt.body = parse_block();
+
+  // `for` can't implicitely return.
+  for_stmt.body->as.block->has_implicit_return = false;
+
   return make_node<for_stmt_t>(ast_node_t::eFor, for_stmt, location, source);
 }
 
@@ -744,7 +748,11 @@ P::parse_while() {
   auto location = token.location;
 
   stmt.condition = parse_expression(0, false);
+
   stmt.body = parse_block();
+  // `white` can't implicitely return.
+  stmt.body->as.block->has_implicit_return = false;
+
   return make_node<while_stmt_t>(ast_node_t::eWhile, stmt, location, source);
 }
 
@@ -835,9 +843,8 @@ P::parse_block() {
     }
   }
 
-  if (block.body.size() > 0 && is_controlflow(block.body.back()) && !block.has_implicit_return) {
-    block.has_implicit_return = true;
-  }
+  // If statements can implicitly return.
+  block.has_implicit_return = block.has_implicit_return || (block.body.size() > 0 && block.body.back()->kind == ast_node_t::eIf);
 
   expect(TT::delimiterRBrace);
   return make_node<block_node_t>(ast_node_t::eBlock, block, location, source);
