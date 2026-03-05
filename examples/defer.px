@@ -1,0 +1,13 @@
+import libc
+
+main := fn () {
+  defer libc.printf("Goodbye!\n");
+  libc.printf("Hello, world!\n");
+
+  if true {
+    defer libc.printf("Nested Exit\n");
+    libc.printf("Nested\n");
+  }
+  libc.printf("After Nested\n");
+}
+

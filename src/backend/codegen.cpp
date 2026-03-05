@@ -753,6 +753,12 @@ VISITOR(block) {
   auto *continue_bb = llvm::BasicBlock::Create(*context, "after", func);
 
   SP<llvm_value_t> return_value {nullptr};
+
+  // We can't return void, skip the implicit handling.
+  if (!block->resolved_return_type || (block->resolved_return_type && ensure_type(block->resolved_return_type)->isVoidTy() == true)) {
+    block->has_implicit_return = false;
+  }
+
   if (block->has_implicit_return) {
     // If we do have an implicit return, we create an alloca for the type.
     auto return_type = ensure_type(block->resolved_return_type);
