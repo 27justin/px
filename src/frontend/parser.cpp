@@ -759,7 +759,17 @@ P::parse_while() {
 SP<ast_node_t>
 P::parse_defer() {
   expect(TT::keywordDefer);
-  return make_node<defer_expr_t>(ast_node_t::eDefer, {parse_expression()}, token.location, source);
+  // TODO: Elevate block expressions into parse_expression.
+  try {
+    lexer.push();
+    auto expr = parse_expression();
+    lexer.commit();
+    return make_node<defer_expr_t>(ast_node_t::eDefer, {expr}, token.location, source);
+  } catch (...) {
+    diagnostics.messages.pop_back();
+    lexer.pop();
+    return make_node<defer_expr_t>(ast_node_t::eDefer, {parse_block()}, token.location, source);
+  }
 }
 
 SP<ast_node_t>

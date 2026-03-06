@@ -455,9 +455,11 @@ A::analyze_call(N node) {
     receiver_path.insert(receiver_path.begin(), qualified_symbol_path.segments.begin(), qualified_symbol_path.segments.end() - 1);
 
     call->implicit_receiver = make_node<symbol_expr_t>(ast_node_t::eSymbol, {receiver_path}, node->location, node->source);
+    analyze_node(call->implicit_receiver);
 
     // Automatically add a `&` if the receiver is a pointer and NOT a self
     // placeholder.
+    // AND the local symbol is not a pointer itself.
     //
     // TODO: This is a crutch for an issue that pertains to just the
     // codegen backend.
@@ -467,11 +469,19 @@ A::analyze_call(N node) {
     // `addr_of_expr_t` breaks our ABI, by passing a pointer where a
     // contract value is expected.
     if (signature->receiver->kind == type_kind_t::ePointer &&
-        signature->receiver->base_type()->kind != type_kind_t::eSelf) {
+        signature->receiver->base_type()->kind != type_kind_t::eSelf &&
+        call->implicit_receiver->type->kind != type_kind_t::ePointer) {
       call->implicit_receiver = make_node<addr_of_expr_t>(ast_node_t::eAddrOf, {call->implicit_receiver}, node->location, node->source);
+      // TODO: Refactor this...
+      //
+      // We have to analyze two times, because we need to look up the
+      // type twice, first to determine if we want to dispatch the
+      // function by-reference, and another analyze to properly
+      // populate the type, when the first case is true.
+      //
+      // I know it sucks, I know it's convoluted.
+      analyze_node(call->implicit_receiver);
     }
-
-    analyze_node(call->implicit_receiver);
 
     call->callee = make_node<symbol_expr_t>(ast_node_t::eSymbol, {full_symbol_path}, node->location, node->source);
     analyze_node(call->callee);
