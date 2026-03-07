@@ -5,7 +5,7 @@ linux.accept    := @(extern: "C", import: "accept")     fn (_: socket, addr: var
 linux.socket    := @(extern: "C", import: "socket")     fn (domain: i32, ty: i32, protocol: i32) -> socket
 linux.bind      := @(extern: "C", import: "bind")       fn (_: socket, addr: !any, addrlen: u64) -> i32
 linux.listen    := @(extern: "C", import: "listen")     fn (_: socket, backlog: i32) -> i32
-linux.inet_pton := @(extern: "C", import: "inet_pton")  fn (af: i32, src: []u8, dst: var !any) -> i32
+linux.inet_pton := @(extern: "C", import: "inet_pton")  fn (af: i32, src: !u8, dst: var !any) -> i32
 
 libc.read       := @(extern: "C", import: "read")       fn (_: fd, dest: var !u8, count: u64) -> i64
 libc.write      := @(extern: "C", import: "write")      fn (_: fd, dest: !u8, count: u64) -> i64

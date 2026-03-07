@@ -802,46 +802,38 @@ VISITOR(declaration) {
   declaration_t *decl = node->as.declaration;
 
   llvm::Type *value_type = ensure_type(node->type);
+  llvm::Value *storage = builder->CreateAlloca(value_type);
 
   // Is the declaration an lvalue (i.e. has an address and requires
   // loading)
   bool is_lvalue = true;
-  llvm::Value *storage = nullptr;
-
   if (decl->value) {
-    auto init = visit_node(decl->value);
-    storage = builder->CreateAlloca(value_type);
-
-    if (decl->value) {
-      switch (decl->value->kind) {
-      case ast_node_t::eZero:
-        // Explicit `zero` keyword.
-        builder->CreateStore(llvm::ConstantInt::getNullValue(value_type), storage);
-        break;
-
-      case ast_node_t::eUninitialized:
-        // Explicit `uninitialized` keyword
-        break;
-
-      default: {
-        auto init = visit_node(decl->value);
-        auto val = load(init);
-
-        if (val.type != value_type) {
-          val = cast(node->type, val);
-        }
-
-        builder->CreateStore(val.value, storage);
-        is_lvalue = true;
-        break;
-      }
-      }
-    } else {
-      // Zero initialize by default
+    switch (decl->value->kind) {
+    case ast_node_t::eZero:
+      // Explicit `zero` keyword.
       builder->CreateStore(llvm::ConstantInt::getNullValue(value_type), storage);
-    }
-  }
+      break;
 
+    case ast_node_t::eUninitialized:
+      // Explicit `uninitialized` keyword
+      break;
+
+    default: {
+      auto init = visit_node(decl->value);
+      auto val = load(init);
+
+      if (val.type != value_type) {
+        val = cast(node->type, val);
+      }
+
+      builder->CreateStore(val.value, storage);
+      break;
+    }
+    }
+  } else {
+    // Zero initialize by default
+    builder->CreateStore(llvm::ConstantInt::getNullValue(value_type), storage);
+  }
 
   if (node->type->kind == type_kind_t::eArray) {
     // Stack arrays don't need loading, they are stack addresses.
