@@ -461,7 +461,7 @@ P::parse_expression(int min_binding_power, bool allow_struct_literal) {
 
      case TT::operatorEqual:
       token = lexer.next();
-      left = make_node<assign_expr_t>(ast_node_t::eAssignment, {.where = left, .value = parse_expression()}, {start, token.location.end}, source);
+      left = make_node<assign_expr_t>(ast_node_t::eAssignment, {.where = left, .value = parse_expression(min_binding_power, allow_struct_literal)}, {start, token.location.end}, source);
       continue;
 
     case TT::operatorRange: {
@@ -592,6 +592,14 @@ P::parse_tuple_expression() {
       break;
   } while (token.type != TT::delimiterRParen);
 
+  if (elements.size() < 2) {
+    auto err = error(source, token.location,
+                     "Invalid tuple",
+                     "Tuples require atleast two members to be qualified as such.");
+    diagnostics.messages.push_back(err);
+    throw parse_error_t {.diagnostics = diagnostics};
+  }
+
   expect(TT::delimiterRParen);
   return make_node<tuple_expr_t>(ast_node_t::eTupleExpr, {.elements = elements}, {start, token.location.end}, source);
 }
@@ -660,7 +668,22 @@ P::parse_primary(bool allow_struct_literal) {
     return parse_array_initializer();
   }
   case TT::delimiterLParen:
-    return parse_tuple_expression();
+    // LParen can be two things,
+    //  1. Grouping an expression to force a specific precedence
+    //  2. A tuple expression
+    try {
+      lexer.push();
+      auto v = parse_tuple_expression();
+      lexer.commit();
+      return v;
+    } catch (...) {
+      diagnostics.messages.pop_back();
+      lexer.pop();
+      expect(TT::delimiterLParen);
+      auto v = parse_expression();
+      expect(TT::delimiterRParen);
+      return v;
+    }
   case TT::keywordZero:
     expect(TT::keywordZero);
     return make_node(ast_node_t::eZero, token.location, source);
