@@ -307,11 +307,6 @@ llvm::Type *codegen_t::ensure_type(SP<type_t> type) {
       }
 
       llvm::StructType::create(types, "contract." + to_string(type->name), true);
-
-      for (auto &[name, req] : type->as.contract->requirements) {
-        // Create dynamic dispatch function
-        contract_emit_dynamic_dispatcher(type, name, req);
-      }
     }
     break;
   }
@@ -604,7 +599,13 @@ codegen_t::slice_create_from_parts(SP<type_t> base_type, const llvm_value_t &poi
 VISITOR(binding) {
   binding_decl_t *decl = node->as.binding_decl;
   current_binding = decl->name;
-  return scope()->set(to_string(decl->name), visit_node(decl->value));
+  auto value = visit_node(decl->value);
+  if (value) { // If we got no value, we likely defined a type or
+               // something that doesn't actually store something.
+    return scope()->set(to_string(decl->name), std::make_shared<llvm_value_t>(cast(node->type, *value)));
+  }
+  scope()->set(to_string(decl->name), nullptr);
+  return nullptr;
 }
 
 VISITOR(function_decl) {
@@ -762,7 +763,7 @@ VISITOR(block) {
   if (block->has_implicit_return) {
     // If we do have an implicit return, we create an alloca for the type.
     auto return_type = ensure_type(block->resolved_return_type);
-    return_value = std::make_shared<llvm_value_t>(builder->CreateAlloca(return_type), return_type, false, block->resolved_return_type);
+    return_value = std::make_shared<llvm_value_t>(builder->CreateAlloca(return_type, 0, nullptr, "retval"), return_type, false, block->resolved_return_type);
   }
 
   SP<llvm_value_t> last_value {nullptr};
@@ -802,7 +803,7 @@ VISITOR(declaration) {
   declaration_t *decl = node->as.declaration;
 
   llvm::Type *value_type = ensure_type(node->type);
-  llvm::Value *storage = builder->CreateAlloca(value_type);
+  llvm::Value *storage = builder->CreateAlloca(value_type, 0, nullptr, decl->identifier);
 
   // Is the declaration an lvalue (i.e. has an address and requires
   // loading)
@@ -1055,12 +1056,18 @@ VISITOR(binop) {
     // Figure out the bitsize of each type, we coalesce to the biggest
     // variant.
     SP<type_t> int_result_type;
-    if (left_type->getIntegerBitWidth() > right_type->getIntegerBitWidth()) {
-      result_type = left_type;
-      int_result_type = expr->left->type;
+
+    if (left_type->isIntegerTy() && right_type->isIntegerTy()) {
+      if (left_type->getIntegerBitWidth() > right_type->getIntegerBitWidth()) {
+        result_type = left_type;
+        int_result_type = expr->left->type;
+      } else {
+        result_type = right_type;
+        int_result_type = expr->right->type;
+      }
     } else {
-      result_type = right_type;
-      int_result_type = expr->right->type;
+      int_result_type = left_type->isPointerTy() ? expr->left->type : expr->right->type;
+      result_type = ensure_type(int_result_type);
     }
 
     if (left_type != result_type) {
@@ -1320,7 +1327,14 @@ VISITOR(unary) {
 
 VISITOR(contract) {
   contract_decl_t *decl = node->as.contract_decl;
+  // First ensure_type, this emits the definition of the contract.
   ensure_type(node->type);
+
+  // Now emit the dynamic dispatchers.
+  for (auto &[name, req] : node->type->as.contract->requirements) {
+    // Create dynamic dispatch function
+    contract_emit_dynamic_dispatcher(node->type, name, req);
+  }
   return nullptr;
 }
 

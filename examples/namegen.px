@@ -20,7 +20,7 @@ main := fn () -> i32 {
   init_rand();
 
   let LENGTH := 3;
-  let NUM_ATTEMPTS := 100;
+  let NUM_ATTEMPTS := 25;
 
   for 0..NUM_ATTEMPTS {
     printf("%i. ", _);
