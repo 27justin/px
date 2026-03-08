@@ -532,6 +532,11 @@ QT
 A::analyze_declaration(N node) {
   declaration_t *decl = node->as.declaration;
 
+  if (scope().contains(decl->identifier)) {
+    diagnostics.messages.push_back(error(source, node->location, "Double declaration", fmt("Symbol {} is already defined in the current scope", decl->identifier)));
+    throw analyze_error_t{diagnostics};
+  }
+
   // Resolve annotation once if it exists
   QT annotated_type = decl->type ? resolve_type(*decl->type) : nullptr;
   bool has_type_hint = false;
@@ -1210,6 +1215,11 @@ A::analyze_assignment(N node) {
 
   auto symbol_type = analyze_node(assign->where);
   auto value_type = analyze_node(assign->value);
+
+  if (!is_mutable(assign->where)) {
+    diagnostics.messages.push_back(error(source, node->location, "Mutability violation", fmt("{} is not declared as `var`, therefore not mutable", source->string(assign->where->location)), "Change the binding to `var`"));
+    throw analyze_error_t{diagnostics};
+  }
 
   if (*symbol_type != *value_type
     && !is_implicit_convertible(value_type, symbol_type)) {

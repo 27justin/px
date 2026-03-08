@@ -9,6 +9,11 @@ struct scope_t {
   SP<symbol_t> resolve(const std::string &identifier);
   SP<symbol_t> resolve(const specialized_path_t &identifier);
 
+  /// Return whether the identifier is present in the current scope
+  /// (checks only the current symbol table, use `resolve` to
+  /// recursively check for a path.)
+  bool contains(const std::string &identifier);
+
   SP<symbol_t> add(const std::string &identifier, SP<type_t>,
                    bool is_mutable = false);
   SP<symbol_t> add(const specialized_path_t &identifier, SP<type_t>,

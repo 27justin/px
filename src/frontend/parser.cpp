@@ -459,10 +459,14 @@ P::parse_expression(int min_binding_power, bool allow_struct_literal) {
         }, {start, token.location.end}, source);
       break;
 
-     case TT::operatorEqual:
+    case TT::operatorEqual: {
+      start = token.location.start;
       token = lexer.next();
-      left = make_node<assign_expr_t>(ast_node_t::eAssignment, {.where = left, .value = parse_expression(min_binding_power, allow_struct_literal)}, {start, token.location.end}, source);
+      auto value = parse_expression(min_binding_power, allow_struct_literal);
+
+      left = make_node<assign_expr_t>(ast_node_t::eAssignment, {.where = left, .value = value}, {start, token.location.end}, source);
       continue;
+    }
 
     case TT::operatorRange: {
       token = lexer.next();

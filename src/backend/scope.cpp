@@ -35,6 +35,10 @@ SP<symbol_t> scope_t::resolve(const specialized_path_t &identifier) {
   return resolve(to_string(identifier));
 }
 
+bool scope_t::contains(const std::string &identifier) {
+  return symbols.contains(identifier);
+}
+
 void scope_t::remove(const specialized_path_t &identifier) {
   remove(to_string(identifier));
 }
