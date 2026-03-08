@@ -671,17 +671,23 @@ VISITOR(function_impl) {
 
   auto llvm_type = ensure_type(node->type);
   llvm::FunctionType *llvm_fn = llvm::dyn_cast<llvm::FunctionType>(llvm_type);
+  auto return_type = llvm_fn->getReturnType();
 
   auto func = llvm::Function::Create(llvm_fn, current_linkage.value_or(llvm::GlobalValue::ExternalLinkage), to_string(*current_binding), *module);
   auto ret_val = scope()->set(to_string(*current_binding), std::make_shared<llvm_value_t>(func, llvm_fn, false));
 
   llvm::BasicBlock *entry = llvm::BasicBlock::Create(*context, "entry", func);
+  llvm::BasicBlock *return_block = llvm::BasicBlock::Create(*context, "return", func);
 
   auto current_block = builder->GetInsertBlock();
-
   builder->SetInsertPoint(entry);
 
   scopes.emplace_back(std::make_shared<llvm_scope_t>(scopes.back()));
+
+  scope()->return_block = return_block;
+  if (return_type->isVoidTy() == false) {
+    scope()->block_return_value = builder->CreateAlloca(return_type, 0, nullptr, "retval");
+  }
 
   for (uint64_t i = 0; i < impl->declaration.parameters.size(); ++i) {
     auto &param = impl->declaration.parameters[i];
@@ -702,8 +708,14 @@ VISITOR(function_impl) {
   }
 
   auto result = visit_node(impl->block);
+  if (return_type->isVoidTy() == false) {
+    builder->CreateStore(load(result).value, scope()->block_return_value);
+  }
+
+  builder->CreateBr(return_block);
+  builder->SetInsertPoint(return_block);
   if (result) {
-    builder->CreateRet(result->value);
+    builder->CreateRet(builder->CreateLoad(return_type, scope()->block_return_value));
   } else {
     builder->CreateRetVoid();
   }
@@ -775,6 +787,7 @@ VISITOR(block) {
     // If we do have an implicit return, we create an alloca for the type.
     auto return_type = ensure_type(block->resolved_return_type);
     return_value = std::make_shared<llvm_value_t>(builder->CreateAlloca(return_type, 0, nullptr, "retval"), return_type, false, block->resolved_return_type);
+    scope->block_return_value = return_value->value;
   }
 
   SP<llvm_value_t> last_value {nullptr};
@@ -804,7 +817,7 @@ VISITOR(block) {
   builder->SetInsertPoint(continue_bb);
 
   if (block->has_implicit_return) {
-    return std::make_shared<llvm_value_t>(load(return_value).value, ensure_type(block->resolved_return_type), false, block->resolved_return_type);
+    return std::make_shared<llvm_value_t>(load(return_value).value, ensure_type(block->resolved_return_type), true, block->resolved_return_type);
   } else {
     return nullptr;
   }
@@ -1470,22 +1483,39 @@ VISITOR(return) {
   // first one that has a return value set, once found, we set our
   // value to that `llvm::Value`, and jump to the current scopes exit block.
 
-  std::shared_ptr<llvm_scope_t> function_scope = nullptr;
+  std::shared_ptr<llvm_scope_t> function_block = nullptr;
   std::shared_ptr<llvm_scope_t> current_scope = scope();
 
   for (auto scope : scopes) {
-    if (scope->block_return_value != nullptr) {
-      function_scope = scope;
+    if (scope->return_block != nullptr) {
+      function_block = scope;
       break;
     }
   }
 
-  // Void returns
-  if (ret->value) {
-    builder->CreateStore(load(visit_node(ret->value)).value, function_scope->block_return_value);
+  // Protect against void returns.
+  if (ret->value != nullptr) {
+    builder->CreateStore(load(visit_node(ret->value)).value, function_block->block_return_value);
   }
 
-  builder->CreateBr(current_scope->exit_block);
+  // Unwind the blocks and run defers.
+  for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
+    auto& s = *it;
+    for (auto dit = s->defer_stack.rbegin(); dit != s->defer_stack.rend(); ++dit) {
+      visit_node(*dit);
+    }
+  }
+
+  // TODO:
+  // Functions are currently made up of two scopes, the first one
+  // "wrapping" the function header, with the parameters, and the return_block,
+  // and the second one being an actual block, this one actually has the return value
+  // therefore we need to branch to the parent of the function_block.
+  builder->CreateBr(function_block->return_block);
+
+  auto func = builder->GetInsertBlock()->getParent();
+  auto *dead_bb = llvm::BasicBlock::Create(*context, "unreachable", func);
+  builder->SetInsertPoint(dead_bb);
 
   return nullptr;
 }

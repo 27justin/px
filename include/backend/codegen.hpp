@@ -26,7 +26,7 @@ struct llvm_scope_t {
   SP<llvm_scope_t> parent;
 
   llvm::Value *block_return_value = nullptr;
-  llvm::BasicBlock *exit_block = nullptr;
+  llvm::BasicBlock *exit_block = nullptr, *return_block = nullptr;
   std::vector<SP<ast_node_t>> defer_stack;
 
   llvm_scope_t(SP<llvm_scope_t> parent) : parent(parent) {}

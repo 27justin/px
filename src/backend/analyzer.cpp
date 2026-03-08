@@ -336,10 +336,12 @@ QT
 A::analyze_block(N node) {
   block_node_t *block = node->as.block;
 
+  push_scope();
   QT last_type {};
   for (auto &v : block->body) {
     last_type = analyze_node(v);
   }
+  pop_scope();
 
   if (block->has_implicit_return) {
     block->resolved_return_type = ensure_concrete(last_type);
@@ -1014,8 +1016,11 @@ A::is_implicit_convertible(QT from, QT into) {
 
 bool
 A::is_cast_convertible(QT from, QT into) {
-  // Casting from concrete types into contracts is allowed.
+  // If the conversion is implicitly allowed, we carry that over.
+  if (is_implicit_convertible(from, into))
+    return true;
 
+  // Casting from concrete types into contracts is allowed.
   if (into->kind == type_kind_t::eContract) {
     return satisfies_contract(from, into);
   }
@@ -1035,6 +1040,18 @@ A::is_cast_convertible(QT from, QT into) {
   if ((into->kind == type_kind_t::eInt || into->kind == type_kind_t::eUint) &&
       (from->kind == type_kind_t::eInt || from->kind == type_kind_t::eUint))
     return true;
+
+  // Casting aliases is allowed.
+  if (into->kind == type_kind_t::eAlias && (*into->as.alias->alias == *from) ||
+      from->kind == type_kind_t::eAlias && (*from->as.alias->alias == *into)) {
+    return true;
+  }
+
+  // Casting distinct types is also allowed
+  if (into->kind == type_kind_t::eOpaque && (*into->as.alias->alias == *from) ||
+      from->kind == type_kind_t::eOpaque && (*from->as.alias->alias == *into)) {
+    return true;
+  }
 
   return false;
 }
