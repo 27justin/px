@@ -686,8 +686,19 @@ VISITOR(function_impl) {
   for (uint64_t i = 0; i < impl->declaration.parameters.size(); ++i) {
     auto &param = impl->declaration.parameters[i];
     auto ty = ensure_type(param.resolved_type);
-    auto llvm_value = func->args().begin() + i;
-    scope()->set(param.name, std::make_shared<llvm_value_t>(llvm_value, ty, true, param.resolved_type));
+    llvm::Value *llvm_value = func->args().begin() + i;
+    bool is_rvalue = true;
+
+    if (param.is_mutable && (!param.is_self || !param.is_self_ref)) {
+      // Mutable parameters have to be alloca'd + stored, LLVM
+      // prohibits modifying parameters directly.
+      auto value = builder->CreateAlloca(ty, nullptr, param.name);
+      builder->CreateStore(llvm_value, value);
+      llvm_value = value;
+      is_rvalue = false;
+    }
+
+    scope()->set(param.name, std::make_shared<llvm_value_t>(llvm_value, ty, is_rvalue, param.resolved_type));
   }
 
   auto result = visit_node(impl->block);
@@ -1448,6 +1459,37 @@ VISITOR(defer) {
   return nullptr;
 }
 
+VISITOR(return) {
+  return_stmt_t *ret = node->as.return_stmt;
+
+  // Since we handle returns a little more specially (block
+  // expression), we can't blindly `CreateRet`, that would prevent
+  // deferred statements from running.
+  //
+  // Instead, we walk forwards from the `scopes`, breaking on the
+  // first one that has a return value set, once found, we set our
+  // value to that `llvm::Value`, and jump to the current scopes exit block.
+
+  std::shared_ptr<llvm_scope_t> function_scope = nullptr;
+  std::shared_ptr<llvm_scope_t> current_scope = scope();
+
+  for (auto scope : scopes) {
+    if (scope->block_return_value != nullptr) {
+      function_scope = scope;
+      break;
+    }
+  }
+
+  // Void returns
+  if (ret->value) {
+    builder->CreateStore(load(visit_node(ret->value)).value, function_scope->block_return_value);
+  }
+
+  builder->CreateBr(current_scope->exit_block);
+
+  return nullptr;
+}
+
 SP<llvm_value_t>
 codegen_t::visit_node(SP<ast_node_t> node) {
   if (!node->type) {
@@ -1569,6 +1611,10 @@ codegen_t::visit_node(SP<ast_node_t> node) {
 
   case ast_node_t::eDefer:
     result = visit_defer(node);
+    break;
+
+  case ast_node_t::eReturn:
+    result = visit_return(node);
     break;
 
   default:

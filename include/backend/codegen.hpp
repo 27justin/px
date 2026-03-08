@@ -116,6 +116,7 @@ private:
   VISITOR(member_access);
   VISITOR(slice_expr);
   VISITOR(defer);
+  VISITOR(return);
   VISITOR(function_decl);
   VISITOR(function_impl);
 

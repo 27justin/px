@@ -1430,10 +1430,12 @@ QT A::analyze_return(N node) {
 
   auto fn = current_function();
 
-  QT ty = analyze_node(stmt->value);
-  if (!is_implicit_convertible(ty, fn->as.function->return_type)) {
-    diagnostics.messages.push_back(error(node->source, node->location, "Unexpected return type", fmt("This function returns `{}`, but type `{}` is not implicitely convertible to it.", to_string(fn->as.function->return_type), to_string(ty))));
-    throw analyze_error_t{diagnostics};
+  if (stmt->value) {
+    QT ty = analyze_node(stmt->value);
+    if (!is_implicit_convertible(ty, fn->as.function->return_type)) {
+      diagnostics.messages.push_back(error(node->source, node->location, "Unexpected return type", fmt("This function returns `{}`, but type `{}` is not implicitely convertible to it.", to_string(fn->as.function->return_type), to_string(ty))));
+      throw analyze_error_t{diagnostics};
+    }
   }
 
   return resolve_type("void");

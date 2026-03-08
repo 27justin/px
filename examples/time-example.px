@@ -1,0 +1,23 @@
+import std.time
+import std.string
+import libc
+
+main := fn () -> i32 {
+  let time1: i64 = 1772909738;
+  let time2: i64 = 1772962438;
+
+  let date1 := std.date.from_unix(time1);
+  let date2 := std.date.from_unix(time2);
+
+  let formatted := date1.to<std.string>();
+  defer formatted.deinit();
+  libc.printf("%.*s\n", formatted.size, formatted.data);
+
+  let delta := date1.subtract(&date2);
+  let formatted2 := delta.to<std.string>();
+  libc.printf("%.*s\n", formatted2.size, formatted2.data);
+
+
+  0
+}
+
