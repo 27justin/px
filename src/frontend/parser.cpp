@@ -55,6 +55,24 @@ std::string substitute_string_escape_characters(const std::string &input) {
         }
         break;
       }
+      case '0': case '1': case '2': case '3':
+      case '4': case '5': case '6': case '7': {
+          std::string oct_str;
+          size_t j = i; // 'i' is currently at the first digit
+
+          // Octal escapes are usually up to 3 digits (e.g., \033)
+          while (j < input.size() && j < i + 3 && input[j] >= '0' && input[j] <= '7') {
+            oct_str += input[j];
+            j++;
+          }
+
+          if (!oct_str.empty()) {
+            unsigned long value = std::stoul(oct_str, nullptr, 8);
+            result += static_cast<char>(value & 0xFF);
+            i = j - 1; // Advance main loop
+          }
+          break;
+        }
       default:
         result += input[i]; // Unknown escape, just keep the character
         break;
@@ -667,6 +685,9 @@ P::parse_primary(bool allow_struct_literal) {
   }
   case TT::keywordSlice: {
     return parse_slice();
+  }
+  case TT::delimiterLBrace: {
+    return parse_block();
   }
   case TT::delimiterLBracket: {
     return parse_array_initializer();

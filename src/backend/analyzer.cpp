@@ -322,7 +322,12 @@ A::analyze_binding(N node) {
 
   current_binding = decl->name;
 
-  QT type = analyze_node(decl->value);
+  QT type = nullptr;
+
+  if (decl->value) {
+    type = analyze_node(decl->value);
+  }
+
   if (decl->type) {
     type = resolve_type(*decl->type);
   }
@@ -1564,7 +1569,15 @@ A::analyze_tuple(N node) {
 QT
 A::analyze_enum(N node) {
   enum_decl_t *decl = node->as.enum_decl;
-  return scope().types.add_enum(*current_binding, *decl);
+
+  auto type = scope().types.add_enum(*current_binding, *decl);
+  for (auto &[memb, vmemb] : decl->values) {
+    auto path = *current_binding;
+    path.segments.push_back(memb);
+    scope().add(path, type, false);
+  }
+
+  return type;
 }
 
 QT

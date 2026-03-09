@@ -599,12 +599,19 @@ codegen_t::slice_create_from_parts(SP<type_t> base_type, const llvm_value_t &poi
 VISITOR(binding) {
   binding_decl_t *decl = node->as.binding_decl;
   current_binding = decl->name;
-  auto value = visit_node(decl->value);
+  SP<llvm_value_t> value;
+
+  // Bindings might not be initialized (global variables, etc.)
+  if (decl->value) {
+    value = visit_node(decl->value);
+  }
+
   if (value) { // If we got no value, we likely defined a type or
                // something that doesn't actually store something.
     return scope()->set(to_string(decl->name), std::make_shared<llvm_value_t>(cast(node->type, *value)));
   }
-  scope()->set(to_string(decl->name), nullptr);
+
+  link_external_symbol(to_string(decl->name), node->type);
   return nullptr;
 }
 
@@ -1414,35 +1421,53 @@ VISITOR(nil) {
 }
 
 VISITOR(if) {
-    if_stmt_t *stmt = node->as.if_stmt;
-    llvm::Function *func = builder->GetInsertBlock()->getParent();
+  if_stmt_t *stmt = node->as.if_stmt;
+  llvm::Function *func = builder->GetInsertBlock()->getParent();
 
-    // 1. Create blocks and immediately attach them to the function
-    llvm::BasicBlock *pass_bb = llvm::BasicBlock::Create(*context, "if.pass", func);
-    llvm::BasicBlock *reject_bb = llvm::BasicBlock::Create(*context, "if.reject", func);
-    llvm::BasicBlock *merge_bb = llvm::BasicBlock::Create(*context, "if.merge", func);
+  llvm::BasicBlock *pass_bb = llvm::BasicBlock::Create(*context, "if.pass", func);
+  llvm::BasicBlock *reject_bb = llvm::BasicBlock::Create(*context, "if.reject", func);
+  llvm::BasicBlock *merge_bb = llvm::BasicBlock::Create(*context, "if.merge", func);
 
-    auto cond_val = load(visit_node(stmt->condition)).value;
-    builder->CreateCondBr(cond_val, pass_bb, reject_bb);
+  auto ret_type = ensure_type(node->type);
+  llvm::Value *return_value = nullptr;
+  if (ret_type->isVoidTy() == false) {
+    return_value = builder->CreateAlloca(ret_type, 0, nullptr, "retval");
+  }
 
-    builder->SetInsertPoint(pass_bb);
-    visit_node(stmt->pass);
+  auto cond_val = load(visit_node(stmt->condition)).value;
+  builder->CreateCondBr(cond_val, pass_bb, reject_bb);
 
-    // Only jump if the block has no terminator (return, jump, etc.)
-    if (!builder->GetInsertBlock()->getTerminator()) {
-        builder->CreateBr(merge_bb);
+  builder->SetInsertPoint(pass_bb);
+
+  if (auto value = visit_node(stmt->pass)) {
+    if (ret_type->isVoidTy() == false) {
+      builder->CreateStore(load(value).value, return_value);
     }
+  }
 
-    builder->SetInsertPoint(reject_bb);
-    if (stmt->reject) {
-        visit_node(stmt->reject);
-    }
-    if (!builder->GetInsertBlock()->getTerminator()) {
-        builder->CreateBr(merge_bb);
-    }
+  // Only jump if the block has no terminator (return, jump, etc.)
+  if (!builder->GetInsertBlock()->getTerminator()) {
+    builder->CreateBr(merge_bb);
+  }
 
-    builder->SetInsertPoint(merge_bb);
+  builder->SetInsertPoint(reject_bb);
+  if (stmt->reject) {
+    if (auto value = visit_node(stmt->reject)){
+      if (ret_type->isVoidTy() == false) {
+        builder->CreateStore(load(value).value, return_value);
+      }
+    }
+  }
+  if (!builder->GetInsertBlock()->getTerminator()) {
+    builder->CreateBr(merge_bb);
+  }
+
+  builder->SetInsertPoint(merge_bb);
+  if (ret_type->isVoidTy() == false) {
+    return std::make_shared<llvm_value_t>(return_value, ret_type, false, node->type);
+  } else {
     return nullptr;
+  }
 }
 
 VISITOR(member_access) {

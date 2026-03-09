@@ -91,10 +91,12 @@ int main(int argc, char **argv) {
       for (auto &msg : err.diagnostics.messages) {
         std::cerr << serialize(msg) << "\n";
       }
+      std::exit(1);
     } catch (const analyze_error_t &err) {
       for (auto &msg : err.diagnostics.messages) {
         std::cerr << serialize(msg) << "\n";
       }
+      std::exit(1);
     }
   }
 
