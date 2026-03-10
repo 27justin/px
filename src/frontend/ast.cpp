@@ -85,7 +85,8 @@ ast_node_t::ast_node_t(const ast_node_t &other) {
     }
     break;
   case eDeclaration:
-    as.declaration->value = std::make_shared<ast_node_t>(*other.as.declaration->value);
+    if (other.as.declaration->value)
+      as.declaration->value = std::make_shared<ast_node_t>(*other.as.declaration->value);
     break;
   case eBinop:
     as.binop->left = std::make_shared<ast_node_t>(*other.as.binop->left);
@@ -147,10 +148,17 @@ ast_node_t::ast_node_t(const ast_node_t &other) {
     as.attribute_decl->affect = std::make_shared<ast_node_t>(*other.as.attribute_decl->affect);
     break;
   case eFor:
-    as.for_stmt->init = std::make_shared<ast_node_t>(*other.as.for_stmt->init);
-    as.for_stmt->condition = std::make_shared<ast_node_t>(*other.as.for_stmt->condition);
-    as.for_stmt->action = std::make_shared<ast_node_t>(*other.as.for_stmt->action);
-    as.for_stmt->body = std::make_shared<ast_node_t>(*other.as.for_stmt->body);
+    if (other.as.for_stmt->init)
+      as.for_stmt->init = std::make_shared<ast_node_t>(*other.as.for_stmt->init);
+
+    if (other.as.for_stmt->condition)
+      as.for_stmt->condition = std::make_shared<ast_node_t>(*other.as.for_stmt->condition);
+
+    if (other.as.for_stmt->action)
+      as.for_stmt->action = std::make_shared<ast_node_t>(*other.as.for_stmt->action);
+
+    if (other.as.for_stmt->body)
+      as.for_stmt->body = std::make_shared<ast_node_t>(*other.as.for_stmt->body);
     break;
   case eWhile:
     as.while_stmt->condition = std::make_shared<ast_node_t>(*other.as.while_stmt->condition);

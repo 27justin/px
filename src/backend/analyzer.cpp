@@ -140,18 +140,18 @@ A::resolve_type(const type_decl_t &ty) {
   QT base = scope().types.resolve(ty.name);
   if (base) {
     if (ty.indirections.size() > 0) {
-      return scope().types.pointer_to(base, ty.indirections, ty.is_mutable);
+      base = scope().types.pointer_to(base, ty.indirections, ty.is_mutable);
     }
 
     if (ty.is_slice && ty.len == nullptr) {
-      return scope().types.slice_of(base, ty.is_mutable);
+      base = scope().types.slice_of(base, ty.is_mutable);
     }
 
     if (ty.len != nullptr) {
       if (ty.len->kind == ast_node_t::eLiteral)
-        return scope().types.array_of(base, std::stoll(ty.len->as.literal_expr->value));
+        base = scope().types.array_of(base, std::stoll(ty.len->as.literal_expr->value));
       else
-        return scope().types.slice_of(base, ty.is_mutable);
+        base = scope().types.slice_of(base, ty.is_mutable);
     }
     return base;
   } else {
@@ -669,7 +669,8 @@ A::resolve_member_access(QT base, const std::string &member_name) {
 
 QT
 A::analyze_symbol(N node) {
-  auto path = node->as.symbol->path;
+  auto symbol = node->as.symbol;
+  auto path = symbol->path;
 
   // Since we don't disambiguate between namespaces, etc., we have to do some special checks on this symbol now.
 
@@ -709,6 +710,10 @@ A::analyze_symbol(N node) {
       ufcs = resolve_path(ufcs);
       auto candidates = scope().candidates(ufcs);
       if (candidates.size() > 0) {
+        // The codegen backend doesnt care about templates, it only
+        // works with fully qualified symbols, type aliases have no
+        // meaning to it, therefore we need to update the path so `T` becomes `i64`
+        symbol->path = resolve_path(symbol->path);
         return monomorphize(candidates.front(), ufcs);
       }
     }
@@ -738,8 +743,24 @@ A::analyze_symbol(N node) {
     if (sym->type->kind == type_kind_t::eEnum) {
       return resolve_enum_element(sym->type, path.segments.back().name);
     }
-
     return sym->type;
+  }
+
+  // If we still found nothing, we could be trying to lookup a path on an aliased type
+  for (auto it = path.segments.begin(); it != path.segments.end();) {
+    auto i = scope().types.resolve(it->name)->name;
+    auto pos = std::distance(path.segments.begin(), it);
+
+    it = path.segments.erase(it);
+    path.segments.insert(path.segments.begin() + pos, i.segments.begin(), i.segments.end());
+
+    try {
+      node->as.symbol->path = path;
+      return analyze_symbol(node);
+    } catch (...) {
+      diagnostics.messages.pop_back();
+    }
+    ++it;
   }
 
   diagnostics.messages.emplace_back(error(source, node->location, "Unknown symbol", fmt("Symbol `{}` is not known in the current scope.", to_string(path))));
@@ -755,7 +776,8 @@ bool
 A::is_lvalue(N node) {
   return node->kind == ast_node_t::eSymbol ||
          node->kind == ast_node_t::eMemberAccess ||
-         node->kind == ast_node_t::eArrayAccess;
+         node->kind == ast_node_t::eArrayAccess ||
+         node->kind == ast_node_t::eDeref;
 }
 
 bool
@@ -781,6 +803,12 @@ A::is_mutable(N node) {
   }
   case ast_node_t::eArrayAccess: {
     return is_mutable(node->as.array_access_expr->value);
+  }
+  case ast_node_t::eMemberAccess: {
+    return is_mutable(node->as.member_access->object);
+  }
+  case ast_node_t::eDeref: {
+    return is_mutable(node->as.deref_expr->value);
   }
   default:
     assert(false && "is_mutable on invalid node type");
@@ -1058,6 +1086,18 @@ A::is_cast_convertible(QT from, QT into) {
     return true;
   }
 
+  // Casting from any pointer to u64 is allowed
+  if (into->kind == type_kind_t::eUint && into->size >= 64 ||
+      from->kind == type_kind_t::ePointer) {
+    return true;
+  }
+
+  // Casting from u64 to any pointer is allowed
+  if (into->kind == type_kind_t::ePointer ||
+      from->kind == type_kind_t::eUint && from->size >= 64) {
+    return true;
+  }
+
   return false;
 }
 
@@ -1193,6 +1233,7 @@ A::monomorphize(SP<template_decl_t> template_, specialized_path_t instantiation)
     scope().types.add_template_alias(template_binding.binding, resolve_type(*type));
   }
 
+  // Deep clone the AST node
   N tree = std::make_shared<ast_node_t>(*template_->value);
 
   // Analyze the body (returns a type involving 'T')
@@ -1442,15 +1483,18 @@ A::analyze_slice(N node) {
   QT size_type = analyze_node(slice->size);
   QT slice_base_type = resolve_type(slice->type);
 
+  QT slice_data_type = scope().types.pointer_to(slice_base_type, {pointer_kind_t::eNullable}, false);
+
   slice->resolved_type = slice_base_type;
 
   if (pointer_type->kind != type_kind_t::ePointer) {
-    diagnostics.messages.push_back(error(node->source, node->location, fmt("Invalid slice operation", "slice(type, pointer, size) takes a `{}` as a second argument, got `{}`", to_string(scope().types.pointer_to(slice_base_type, {pointer_kind_t::eNonNullable}, false)), to_string(pointer_type))));
+    diagnostics.messages.push_back(error(node->source, node->location, fmt("Invalid slice operation", "slice(type, pointer, size) takes a `{}` as a second argument, got `{}`", to_string(slice_data_type), to_string(pointer_type))));
     throw analyze_error_t{diagnostics};
   }
 
-  if (*pointer_type->as.pointer->deref() != *slice_base_type) {
-    diagnostics.messages.push_back(error(node->source, node->location, "Invalid slice operation", fmt("slice(type, pointer, size) takes a `{}` as a second argument, got `{}`", to_string(scope().types.pointer_to(slice_base_type, {pointer_kind_t::eNonNullable}, false)), to_string(pointer_type))));
+  if (*pointer_type->as.pointer->deref() != *slice_base_type &&
+    !is_implicit_convertible(pointer_type, slice_data_type)) {
+    diagnostics.messages.push_back(error(node->source, node->location, "Invalid slice operation", fmt("slice(type, pointer, size) takes a `{}` as a second argument, got `{}`", to_string(slice_data_type), to_string(pointer_type))));
     throw analyze_error_t{diagnostics};
   }
 

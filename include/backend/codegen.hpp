@@ -32,6 +32,7 @@ struct llvm_scope_t {
   llvm_scope_t(SP<llvm_scope_t> parent) : parent(parent) {}
   SP<llvm_value_t> resolve(const std::string &);
   SP<llvm_value_t> set(const std::string &, const SP<llvm_value_t>);
+  llvm_scope_t &root();
 };
 
 struct codegen_t {

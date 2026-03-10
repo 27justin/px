@@ -22,9 +22,8 @@ int main(int argc, char **argv) {
   std::vector<std::string> link_libraries;
   std::optional<std::string> output_file;
 
-  bool output_object_file = false,
-    output_full_binary = true,
-    output_llvm_ir = false;
+  bool output_object_file = false, output_full_binary = true,
+       output_llvm_ir = false, output_ast = false;
 
   auto cli = lyra::cli()
     | lyra::opt(include_directories, "includes")
@@ -41,6 +40,7 @@ int main(int argc, char **argv) {
                    .help("Output LLVM IR")
     | lyra::opt(output_file, "Output file")
                    ["-o"]
+    | lyra::opt(output_ast)["-dump-ast"].help("Output AST representation")
     | lyra::arg(source_files, "input files")
                    ("The source files to compile.");
 
@@ -68,25 +68,26 @@ int main(int argc, char **argv) {
       parser_t parser(lexer, src);
       auto tu = parser.parse();
 
-      // for (auto &node : tu.declarations) {
-      //   dump_ast(*node);
-      // }
-
       analyzer_t analyzer(src);
       analyzer.set_include_directories(include_directories);
 
       auto su = analyzer.analyze(tu);
 
-      codegen_t codegen(src, std::move(su));
-      codegen.generate();
+      if (!output_ast) {
+        codegen_t codegen(src, std::move(su));
+        codegen.generate();
 
-      if (output_object_file || output_full_binary) {
-        object_files.push_back(codegen.compile_to_object(output_object_file ? output_file : std::nullopt));
+        if (output_object_file || output_full_binary) {
+          object_files.push_back(codegen.compile_to_object(output_object_file ? output_file : std::nullopt));
+        }
+
+        if (output_llvm_ir)
+          codegen.compile_to_llvm_ir(output_file);
+      } else {
+        for (auto &ast_node : su.unit.declarations) {
+          dump_ast(*ast_node);
+        }
       }
-
-      if (output_llvm_ir)
-        codegen.compile_to_llvm_ir(output_file);
-
     } catch (const parse_error_t &err) {
       for (auto &msg : err.diagnostics.messages) {
         std::cerr << serialize(msg) << "\n";
@@ -101,7 +102,7 @@ int main(int argc, char **argv) {
   }
 
   // Link (only if `output_full_binary`)
-  if (output_full_binary) {
+  if (output_full_binary && !output_ast) {
     compile_binary(object_files, link_libraries, output_file.value_or("a.out"));
   }
 }

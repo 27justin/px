@@ -48,6 +48,12 @@ llvm_scope_t::set(const std::string &name, SP<llvm_value_t> value) {
   return value;
 }
 
+llvm_scope_t &
+llvm_scope_t::root() {
+  if (parent) return parent->root();
+  return *this;
+}
+
 SP<llvm_value_t>
 llvm_scope_t::resolve(const std::string &name) {
   if (symbol_map.contains(name))
@@ -131,36 +137,36 @@ codegen_t::codegen_t(std::shared_ptr<source_t> src, semantic_info_t &&s) : sourc
 }
 
 void codegen_t::link_external_symbol(const std::string &name, SP<type_t> type) {
-    llvm::Type *llvm_type = ensure_type(type);
+  llvm::Type *llvm_type = ensure_type(type);
 
-    switch (type->kind) {
-    case type_kind_t::eFunction: {
-        auto *func_type = llvm::cast<llvm::FunctionType>(llvm_type);
+  switch (type->kind) {
+  case type_kind_t::eFunction: {
+    auto *func_type = llvm::cast<llvm::FunctionType>(llvm_type);
 
-        auto func_callee = module->getOrInsertFunction(name, func_type);
-        auto *func = llvm::cast<llvm::Function>(func_callee.getCallee());
+    auto func_callee = module->getOrInsertFunction(name, func_type);
+    auto *func = llvm::cast<llvm::Function>(func_callee.getCallee());
 
-        func->setLinkage(llvm::GlobalValue::ExternalLinkage);
+    func->setLinkage(llvm::GlobalValue::ExternalLinkage);
 
-        auto value = std::make_shared<llvm_value_t>(func, llvm_type, false, type);
-        scope()->set(name, value);
-        break;
-    }
-    default: {
-        llvm::GlobalVariable *variable = new llvm::GlobalVariable(
-            *module,
-            llvm_type,
-            false,
-            llvm::GlobalValue::ExternalLinkage,
-            nullptr,
-            name
-        );
+    auto value = std::make_shared<llvm_value_t>(func, llvm_type, false, type);
+    scope()->set(name, value);
+    break;
+  }
+  default: {
+    llvm::GlobalVariable *variable = new llvm::GlobalVariable(
+        *module,
+        llvm_type,
+        false,
+        llvm::GlobalValue::ExternalLinkage,
+        nullptr,
+        name
+    );
 
-        auto value = std::make_shared<llvm_value_t>(variable, llvm_type, true, type);
-        scope()->set(name, value);
-        break;
-    }
-    }
+    auto value = std::make_shared<llvm_value_t>(variable, llvm_type, true, type);
+    scope()->set(name, value);
+    break;
+  }
+  }
 }
 
 void
@@ -547,7 +553,7 @@ codegen_t::address_of(SP<ast_node_t> node) {
     auto value = visit_node(expr->value);
     // Address of implies that we need return something that shouldnt
     // be able to be `load'ed any further, therefore is_rvalue = true.
-    return std::make_shared<llvm_value_t>(value->value, value->type, true);
+    return std::make_shared<llvm_value_t>(value->value, value->type, true, node->type);
   }
   case ast_node_t::eDeref: {
     auto result = visit_node(node->as.deref_expr->value);
@@ -591,7 +597,7 @@ codegen_t::slice_create_from_parts(SP<type_t> base_type, const llvm_value_t &poi
   llvm::Value *slice = llvm::ConstantAggregateZero::get(llvm_slice_type);
 
   slice = builder->CreateInsertValue(slice, load(pointer).value, {0}, "slice.data");
-  slice = builder->CreateInsertValue(slice, cast(llvm_type_cache.at(builder->getIntNTy(64)), size).value, {1}, "slice.size");
+  slice = builder->CreateInsertValue(slice, cast(llvm_type_cache.at(builder->getIntNTy(64)), load(size)).value, {1}, "slice.size");
 
   return llvm_value_t (slice, llvm_slice_type, true, slice_type);
 }
@@ -681,7 +687,7 @@ VISITOR(function_impl) {
   auto return_type = llvm_fn->getReturnType();
 
   auto func = llvm::Function::Create(llvm_fn, current_linkage.value_or(llvm::GlobalValue::ExternalLinkage), to_string(*current_binding), *module);
-  auto ret_val = scope()->set(to_string(*current_binding), std::make_shared<llvm_value_t>(func, llvm_fn, false));
+  auto ret_val = scope()->root().set(to_string(*current_binding), std::make_shared<llvm_value_t>(func, llvm_fn, false));
 
   llvm::BasicBlock *entry = llvm::BasicBlock::Create(*context, "entry", func);
   llvm::BasicBlock *return_block = llvm::BasicBlock::Create(*context, "return", func);
@@ -910,6 +916,13 @@ codegen_t::resolve_member(const llvm_value_t &val, const std::string &member) {
   llvm::Value *current_val = val.value;
   SP<type_t> current_type = val.base_type;
 
+  // If this is an lvalue (stack slot) holding a pointer, we must load
+  // the actual address before we can perform member access.
+  if (!val.is_rvalue && current_type->kind == type_kind_t::ePointer) {
+    current_val = builder->CreateLoad(ensure_type(current_type), current_val);
+    current_type = current_type->base_type();
+  }
+
   // Strip away nested pointer levels.
   while (current_type->kind == type_kind_t::ePointer &&
          current_type->as.pointer->deref()->kind == type_kind_t::ePointer) {
@@ -975,7 +988,7 @@ VISITOR(symbol) {
 
     current_linkage = std::nullopt;
 
-    return scope()->resolve(to_string(symbol->path));
+    return scope()->root().resolve(to_string(symbol->path));
   }
 
   // Member lookups
@@ -987,19 +1000,15 @@ VISITOR(symbol) {
   // Erase first segment
   path.segments.erase(path.segments.begin());
 
-  do {
-    // Get next one.
-    segment = path.segments.front();
-
-    auto member = resolve_member(*left, segment.name);
+  while (path.segments.size() > 0 && left) {
+    auto member = resolve_member(*left, path.segments.front().name);
     if (member == nullptr) {
       // If we couldn't resolve this segment, it might be a UFCS function.
       break;
     }
-
     left = member;
     path.segments.erase(path.segments.begin());
-  } while (left && path.segments.size() > 0);
+  }
 
   if (left && path.segments.size() == 0) {
     return left;
@@ -1170,18 +1179,27 @@ VISITOR(array_access) {
 
   auto element_type = ensure_type(expr->value->type->base_type());
 
-  llvm::Value* address = builder->CreateGEP(element_type, base, {offset}, "array_idx");
-
-  return std::make_shared<llvm_value_t>(address, element_type, false);
+  llvm::Value* address = builder->CreateGEP(element_type, base, {offset}, "array_element");
+  return std::make_shared<llvm_value_t>(address, element_type, false, expr->value->type->base_type());
 }
 
 VISITOR(deref) {
   deref_expr_t *expr = node->as.deref_expr;
 
+  // Resolve the pointer address.
   auto value = visit_node(expr->value);
+
+  // Strip one level of indirection from the base type.
   auto new_type = value->base_type->base_type();
 
-  return std::make_shared<llvm_value_t>(builder->CreateLoad(ensure_type(new_type), value->value), ensure_type(new_type), true, new_type);
+  // Return the raw pointer address as an lvalue.
+  // We do not emit a load here so that the assignment visitor can
+  // use the address as a store destination.
+  return std::make_shared<llvm_value_t>(
+    value->value,
+    ensure_type(new_type),
+    false, // Mark as lvalue (pointer is the result)
+    new_type);
 }
 
 VISITOR(for) {
