@@ -18,6 +18,7 @@ add_executable(pxc
   src/backend/scope.cpp
   src/backend/type.cpp
   src/backend/codegen.cpp
+  src/backend/value.cpp
   src/frontend/compiler.cpp)
 
 target_include_directories(pxc PRIVATE third_party)

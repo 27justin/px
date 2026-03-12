@@ -1,6 +1,7 @@
 #include "backend/codegen.hpp"
 #include "backend/analyzer.hpp"
 #include "backend/type.hpp"
+#include "backend/value.hpp"
 #include "frontend/ast.hpp"
 #include "frontend/path.hpp"
 #include "frontend/token.hpp"
@@ -326,7 +327,13 @@ llvm::Type *codegen_t::ensure_type(SP<type_t> type) {
     }
 
     if (fn->receiver) {
-      params.insert(params.begin(), ensure_type(fn->receiver));
+      // Special case for contract UFCS functions, we make contract
+      // receivers take the contract by-value, rather than by-pointer.
+      // The analyzer however returns by pointer.
+      if (fn->receiver->base_type() && fn->receiver->base_type()->kind == type_kind_t::eContract)
+        params.insert(params.begin(), ensure_type(fn->receiver->base_type()));
+      else
+        params.insert(params.begin(), ensure_type(fn->receiver));
     }
 
     result = llvm::FunctionType::get(ret_ty, params, fn->is_var_args);
@@ -415,6 +422,12 @@ codegen_t::cast(SP<type_t> type, const llvm_value_t &value) {
   if (target_type->isIntegerTy() && value.type->isIntegerTy()) {
     // Int cast
     return llvm_value_t(builder->CreateIntCast(load(value).value, target_type, type->is_signed()), target_type, true);
+  }
+
+  // Casting integers <-> pointers
+  if ((target_type->isPointerTy() && value.type->isIntegerTy()) ||
+      (value.type->isPointerTy() && target_type->isIntegerTy())) {
+    return llvm_value_t(builder->CreateBitOrPointerCast(load(value).value, target_type), target_type, true, type);
   }
 
   if (type->kind == type_kind_t::eContract) {
@@ -699,7 +712,7 @@ VISITOR(function_impl) {
 
   scope()->return_block = return_block;
   if (return_type->isVoidTy() == false) {
-    scope()->block_return_value = builder->CreateAlloca(return_type, 0, nullptr, "retval");
+    scope()->return_value = builder->CreateAlloca(return_type, 0, nullptr, "retval");
   }
 
   for (uint64_t i = 0; i < impl->declaration.parameters.size(); ++i) {
@@ -722,13 +735,13 @@ VISITOR(function_impl) {
 
   auto result = visit_node(impl->block);
   if (return_type->isVoidTy() == false) {
-    builder->CreateStore(load(result).value, scope()->block_return_value);
+    builder->CreateStore(load(result).value, scope()->return_value);
   }
 
   builder->CreateBr(return_block);
   builder->SetInsertPoint(return_block);
   if (result) {
-    builder->CreateRet(builder->CreateLoad(return_type, scope()->block_return_value));
+    builder->CreateRet(builder->CreateLoad(return_type, scope()->return_value));
   } else {
     builder->CreateRetVoid();
   }
@@ -799,8 +812,8 @@ VISITOR(block) {
   if (block->has_implicit_return) {
     // If we do have an implicit return, we create an alloca for the type.
     auto return_type = ensure_type(block->resolved_return_type);
-    return_value = std::make_shared<llvm_value_t>(builder->CreateAlloca(return_type, 0, nullptr, "retval"), return_type, false, block->resolved_return_type);
-    scope->block_return_value = return_value->value;
+    return_value = std::make_shared<llvm_value_t>(builder->CreateAlloca(return_type, 0, nullptr, "blockval"), return_type, false, block->resolved_return_type);
+    scope->return_value = return_value->value;
   }
 
   SP<llvm_value_t> last_value {nullptr};
@@ -889,7 +902,7 @@ VISITOR(literal) {
   switch (expr->type) {
   case literal_type_t::eInteger: {
     // TODO: Can't handle uint64_t at max extent (above limits of int64_t)
-    value = llvm::ConstantInt::get(type, std::stoll(expr->value));
+    value = llvm::ConstantInt::get(type, evaluate_int_literal(expr->value));
     break;
   }
   case literal_type_t::eBool: {
@@ -901,7 +914,8 @@ VISITOR(literal) {
     break;
   }
   case literal_type_t::eString: {
-    value = builder->CreateGlobalString(expr->value, "", 0, module.get());
+    //value = builder->CreateGlobalString(expr->value, "", 0, module.get());
+    value = string_literal_global_create(expr->value);
     break;
   }
   default:
@@ -909,6 +923,10 @@ VISITOR(literal) {
     break;
   }
   return std::make_shared<llvm_value_t>(value, type, true, node->type);
+}
+
+llvm::Value *codegen_t::string_literal_global_create(const std::string &str) {
+  return builder->CreateGlobalString(str, "", 0, module.get());
 }
 
 SP<llvm_value_t>
@@ -1156,6 +1174,26 @@ VISITOR(binop) {
         inst = is_float ? P::FCMP_OLE : use_signed_cmp ? P::ICMP_SLE : P::ICMP_ULE;
         break;
 
+      case binop_type_t::eBitAnd:
+        return std::make_shared<llvm_value_t>(builder->CreateAnd(load(left).value, load(right).value), left_type, true);
+
+      case binop_type_t::eBitOr:
+        return std::make_shared<llvm_value_t>(builder->CreateOr(load(left).value, load(right).value), left_type, true);
+
+      case binop_type_t::eXor:
+        return std::make_shared<llvm_value_t>(builder->CreateXor(load(left).value, load(right).value), left_type, true);
+
+      case binop_type_t::eBitShiftLeft:
+        return std::make_shared<llvm_value_t>(builder->CreateShl(load(left).value, load(right).value), left_type, true);
+
+      case binop_type_t::eBitShiftRight:
+        // Logical shift (lshr) for unsigned, Arithmetic shift (ashr) for signed
+        if (use_signed_cmp) {
+          return std::make_shared<llvm_value_t>(builder->CreateAShr(load(left).value, load(right).value), left_type, true);
+        } else {
+          return std::make_shared<llvm_value_t>(builder->CreateLShr(load(left).value, load(right).value), left_type, true);
+        }
+
       default:
         throw std::runtime_error ("Internal Compiler Error: Unhandled non-scalar binary operation.");
         break;
@@ -1190,13 +1228,13 @@ VISITOR(deref) {
   auto value = visit_node(expr->value);
 
   // Strip one level of indirection from the base type.
-  auto new_type = value->base_type->base_type();
+  auto new_type = value->base_type->as.pointer->deref();
 
   // Return the raw pointer address as an lvalue.
   // We do not emit a load here so that the assignment visitor can
   // use the address as a store destination.
   return std::make_shared<llvm_value_t>(
-    value->value,
+    load(value).value,
     ensure_type(new_type),
     false, // Mark as lvalue (pointer is the result)
     new_type);
@@ -1329,6 +1367,36 @@ VISITOR(struct_initializer) {
   return std::make_shared<llvm_value_t>(struct_ptr, struct_ty);
 }
 
+VISITOR(array_initializer) {
+  array_initialize_expr_t *expr = node->as.array_initialize_expr;
+
+  llvm::Type* element_type = ensure_type(node->type->base_type());
+  llvm::ArrayType* array_type = llvm::ArrayType::get(element_type, expr->values.size());
+
+  llvm::Value* array_ptr = builder->CreateAlloca(array_type, nullptr, "array_init");
+
+  for (size_t i = 0; i < expr->values.size(); ++i) {
+    auto value_node = visit_node(expr->values[i]);
+    auto loaded_value = load(*value_node);
+
+    // GEP into the array at the current index.
+    // Uses {0, i} to deref the array pointer and step into the element.
+    llvm::Value* element_ptr = builder->CreateInBoundsGEP(
+      array_type,
+      array_ptr,
+      {builder->getInt32(0), builder->getInt32((uint32_t)i)});
+
+    builder->CreateStore(loaded_value.value, element_ptr);
+  }
+
+  return std::make_shared<llvm_value_t>(
+    array_ptr,
+    array_type,
+    true, // We don't need to load any further, loading this would
+          // yield the first element.
+    node->type);
+}
+
 VISITOR(tuple) {
   tuple_expr_t *expr = node->as.tuple_expr;
 
@@ -1390,11 +1458,19 @@ VISITOR(contract) {
 VISITOR(assignment) {
   assign_expr_t *expr = node->as.assign_expr;
 
-  auto left = visit_node(expr->where);
+  SP<llvm_value_t> left {nullptr};
+  if (expr->where->kind == ast_node_t::eDeref) {
+    // Assigning to a deref circumvents the deref, we want to assign
+    // to the value behind the address, not to the rvalue
+    auto address = load(*visit_node(expr->where->as.deref_expr->value));
+    left = std::make_shared<llvm_value_t>(address.value, address.type, address.is_rvalue, address.base_type);
+  } else {
+    left = visit_node(expr->where);
+  }
   auto right = visit_node(expr->value);
 
-  builder->CreateStore(load(right).value, left->value);
-  return std::make_shared<llvm_value_t>(load(left).value, left->type, true);
+  builder->CreateStore(load(*right).value, left->value);
+  return std::make_shared<llvm_value_t>(load(*left).value, left->type, true, node->type);
 }
 
 llvm::Value *codegen_t::contract_emit_static_vtable(SP<type_t> contract_ty, SP<type_t> implementor) {
@@ -1456,7 +1532,6 @@ VISITOR(if) {
   builder->CreateCondBr(cond_val, pass_bb, reject_bb);
 
   builder->SetInsertPoint(pass_bb);
-
   if (auto value = visit_node(stmt->pass)) {
     if (ret_type->isVoidTy() == false) {
       builder->CreateStore(load(value).value, return_value);
@@ -1527,18 +1602,22 @@ VISITOR(return) {
   // value to that `llvm::Value`, and jump to the current scopes exit block.
 
   std::shared_ptr<llvm_scope_t> function_block = nullptr;
+  llvm::Function* current_func = builder->GetInsertBlock()->getParent();
   std::shared_ptr<llvm_scope_t> current_scope = scope();
 
   for (auto scope : scopes) {
     if (scope->return_block != nullptr) {
-      function_block = scope;
-      break;
+      // Ensure this return block actually belongs to the function we are in
+      if (scope->return_block->getParent() == current_func) {
+        function_block = scope;
+        break;
+      }
     }
   }
 
   // Protect against void returns.
   if (ret->value != nullptr) {
-    builder->CreateStore(load(visit_node(ret->value)).value, function_block->block_return_value);
+    builder->CreateStore(load(visit_node(ret->value)).value, function_block->return_value);
   }
 
   // Unwind the blocks and run defers.
@@ -1552,15 +1631,61 @@ VISITOR(return) {
   // TODO:
   // Functions are currently made up of two scopes, the first one
   // "wrapping" the function header, with the parameters, and the return_block,
-  // and the second one being an actual block, this one actually has the return value
-  // therefore we need to branch to the parent of the function_block.
-  builder->CreateBr(function_block->return_block);
+  // and the second one being an actual block, this one actually has the return
+  // value therefore we need to branch to the parent of the function_block.
 
   auto func = builder->GetInsertBlock()->getParent();
+
+  builder->CreateBr(function_block->return_block);
+  builder->ClearInsertionPoint();
+
   auto *dead_bb = llvm::BasicBlock::Create(*context, "unreachable", func);
   builder->SetInsertPoint(dead_bb);
 
   return nullptr;
+}
+
+VISITOR(pointer_coerce) {
+  auto pointer_val = visit_node(node->as.pointer_coerce_expr->value);
+  auto val = load(*pointer_val);
+
+  auto* current_func = builder->GetInsertBlock()->getParent();
+  auto* fail_block = llvm::BasicBlock::Create(*context, "nil.assert.fail", current_func);
+  auto* cont_block = llvm::BasicBlock::Create(*context, "nil.assert.cont", current_func);
+
+  // Convert pointer to i1 (true if not null, false if null)
+  llvm::Value* is_not_null = builder->CreateIsNotNull(val.value, "is_not_null");
+  builder->CreateCondBr(is_not_null, cont_block, fail_block);
+
+  // --- Failure Block ---
+  builder->SetInsertPoint(fail_block);
+
+  // Signature: void __assert_fail(const char*, const char*, unsigned int, const char*)
+  std::vector<llvm::Type*> args = {
+    builder->getPtrTy(), // assertion message
+    builder->getPtrTy(), // file
+    builder->getInt32Ty(), // line
+    builder->getPtrTy()  // function
+  };
+
+  auto assert_func = module->getOrInsertFunction("__assert_fail",
+                                                            llvm::FunctionType::get(builder->getVoidTy(), args, false));
+
+  // Create global string constants for the error metadata
+  // Note: create_string_literal should wrap builder->CreateGlobalStringPtr
+  llvm::Value* msg = string_literal_global_create("Pointer coercion failed: value is nil");
+  llvm::Value* file = string_literal_global_create(std::string(node->source->name()));
+  llvm::Value* func = string_literal_global_create(current_func->getName().str());
+  llvm::Value* line = builder->getInt32(node->location.start.line);
+
+  builder->CreateCall(assert_func, {msg, file, line, func});
+  builder->CreateUnreachable();
+
+  // --- Continue Block ---
+  builder->SetInsertPoint(cont_block);
+
+  // Return the original pointer value (now guaranteed non-null)
+  return std::make_shared<llvm_value_t>(val.value, val.type, true, val.base_type);
 }
 
 SP<llvm_value_t>
@@ -1688,6 +1813,14 @@ codegen_t::visit_node(SP<ast_node_t> node) {
 
   case ast_node_t::eReturn:
     result = visit_return(node);
+    break;
+
+  case ast_node_t::eArrayInitializeExpr:
+    result = visit_array_initializer(node);
+    break;
+
+  case ast_node_t::ePointerCoerce:
+    result = visit_pointer_coerce(node);
     break;
 
   default:

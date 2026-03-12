@@ -113,6 +113,10 @@ std::pair<int, int> get_binding_power(TT type) {
   case TT::operatorMultiply:
   case TT::operatorDivide:
   case TT::operatorMod:
+  case TT::operatorShiftLeft:
+  case TT::operatorShiftRight:
+  case TT::operatorAnd:
+  case TT::operatorPipe:
   case TT::operatorXor:         return {30, 31};
 
   // Casting
@@ -530,6 +534,13 @@ P::parse_expression(int min_binding_power, bool allow_struct_literal) {
       break;
     }
 
+    case TT::operatorExclamation: {
+      // Postfix !, coerce nullable into non-nullable (assertion)
+      expect(TT::operatorExclamation);
+      left = make_node<pointer_coerce_expr_t>(ast_node_t::ePointerCoerce, {.value = left}, token.location, source);
+      break;
+    }
+
     default: {
       token = lexer.next();
       // Standard Binary Operator
@@ -702,7 +713,8 @@ P::parse_primary(bool allow_struct_literal) {
       lexer.commit();
       return v;
     } catch (...) {
-      diagnostics.messages.pop_back();
+      if (diagnostics.messages.size() > 0)
+        diagnostics.messages.pop_back();
       lexer.pop();
       expect(TT::delimiterLParen);
       auto v = parse_expression();
@@ -1381,6 +1393,16 @@ binop_type_t P::binop_type(const token_t &tok) {
     return BT::eLTE;
   case TT::operatorMod:
     return BT::eMod;
+  case TT::operatorAnd:
+    return BT::eBitAnd;
+  case TT::operatorXor:
+    return BT::eXor;
+  case TT::operatorPipe:
+    return BT::eBitOr;
+  case TT::operatorShiftLeft:
+    return BT::eBitShiftLeft;
+  case TT::operatorShiftRight:
+    return BT::eBitShiftRight;
   default:
     assert(false && "Invalid binop token");
   }

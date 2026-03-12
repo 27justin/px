@@ -32,7 +32,12 @@ enum class binop_type_t {
   eLT,
   eLTE,
   eGTE,
-  eMod
+  eMod,
+  eBitAnd,
+  eBitOr,
+  eBitShiftLeft,
+  eBitShiftRight,
+  eXor
 };
 
 struct unary_expr_t;
@@ -71,6 +76,7 @@ struct array_initialize_expr_t;
 struct tuple_expr_t;
 struct member_access_expr_t;
 struct enum_decl_t;
+struct pointer_coerce_expr_t;
 
 enum class literal_type_t {eString, eInteger, eFloat, eBool};
 
@@ -116,7 +122,8 @@ enum class literal_type_t {eString, eInteger, eFloat, eBool};
   X(eTupleExpr)              \
   X(eEnumDecl)               \
   X(eZero)                   \
-  X(eUninitialized)
+  X(eUninitialized)          \
+  X(ePointerCoerce)
 
 struct ast_node_t {
   ~ast_node_t();
@@ -168,6 +175,7 @@ struct ast_node_t {
       array_initialize_expr_t *array_initialize_expr;
       tuple_expr_t *tuple_expr;
       enum_decl_t *enum_decl;
+      pointer_coerce_expr_t *pointer_coerce_expr;
       void *raw;
     };
   } as;
@@ -406,6 +414,10 @@ struct array_initialize_expr_t {
 
 struct tuple_expr_t {
   std::vector<std::pair<std::optional<std::string>, SP<ast_node_t>>> elements;
+};
+
+struct pointer_coerce_expr_t {
+  SP<ast_node_t> value;
 };
 
 std::string to_string(const type_decl_t &);

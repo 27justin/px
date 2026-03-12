@@ -11,6 +11,7 @@
 #include "frontend/parser.hpp"
 #include "frontend/path.hpp"
 #include "frontend/token.hpp"
+#include "backend/value.hpp"
 
 using QT = SP<type_t>;
 using N = SP<ast_node_t>;
@@ -477,6 +478,7 @@ A::analyze_call(N node) {
     // contract value is expected.
     if (signature->receiver->kind == type_kind_t::ePointer &&
         signature->receiver->base_type()->kind != type_kind_t::eSelf &&
+        signature->receiver->base_type()->kind != type_kind_t::eContract &&
         call->implicit_receiver->type->kind != type_kind_t::ePointer) {
       call->implicit_receiver = make_node<addr_of_expr_t>(ast_node_t::eAddrOf, {call->implicit_receiver}, node->location, node->source);
       // TODO: Refactor this...
@@ -975,6 +977,11 @@ A::is_implicit_convertible(QT from, QT into) {
   if (*from == *into)
     return true;
 
+  // Casting from concrete types into contracts is allowed.
+  if (into->kind == type_kind_t::eContract) {
+    return satisfies_contract(from, into);
+  }
+
   // Compile-time arrays can be converted to slices.
   if (from->kind == type_kind_t::eArray && into->kind == type_kind_t::eSlice
     && from->as.array->element_type == into->as.slice->element_type) {
@@ -1044,6 +1051,12 @@ A::is_implicit_convertible(QT from, QT into) {
     }
   }
 
+  // f32 can turn into f64
+  if (from->kind == type_kind_t::eFloat && into->kind == type_kind_t::eFloat &&
+      from->size <= into->size) {
+    return true;
+  }
+
   return false;
 }
 
@@ -1052,11 +1065,6 @@ A::is_cast_convertible(QT from, QT into) {
   // If the conversion is implicitly allowed, we carry that over.
   if (is_implicit_convertible(from, into))
     return true;
-
-  // Casting from concrete types into contracts is allowed.
-  if (into->kind == type_kind_t::eContract) {
-    return satisfies_contract(from, into);
-  }
 
   if (from->kind == type_kind_t::ePointer &&
       into->kind == type_kind_t::ePointer) {
@@ -1097,7 +1105,6 @@ A::is_cast_convertible(QT from, QT into) {
       from->kind == type_kind_t::eUint && from->size >= 64) {
     return true;
   }
-
   return false;
 }
 
@@ -1312,6 +1319,8 @@ A::analyze_while(N node) {
 QT
 A::analyze_for(N node) {
   for_stmt_t *stmt = node->as.for_stmt;
+  push_scope();
+
   QT cond = analyze_node(stmt->condition);
 
   if (stmt->init) {
@@ -1324,6 +1333,8 @@ A::analyze_for(N node) {
     QT action = analyze_node(stmt->action);
 
   analyze_node(stmt->body);
+
+  pop_scope();
   return resolve_type("void");
 }
 
@@ -1458,7 +1469,7 @@ bool A::is_within_bounds(__int128_t val, QT target_type) {
 bool
 A::can_fit_literal(const std::string &str, QT target_type) {
   if (!target_type->is_numeric()) return false;
-  __int128_t value = std::stoll(str);
+  __int128_t value = evaluate_int_literal(str);
   return is_within_bounds(value, target_type);
 }
 
@@ -1641,13 +1652,25 @@ A::analyze_unary(N node) {
   return analyze_node(node->as.unary->value);
 }
 
+QT
+A::analyze_pointer_coerce(N node) {
+  QT type = analyze_node(node->as.pointer_coerce_expr->value);
+
+  if (type->kind != type_kind_t::ePointer ||
+      (type->kind == type_kind_t::ePointer && type->as.pointer->indirections.front() == pointer_kind_t::eNonNullable)) {
+    diagnostics.messages.push_back(error(source, node->location, "Invalid pointer coercion", fmt("Pointer coercion is only applicable to cast nullable pointer to non-nullable ones, this expression has type {}", to_string(type->name))));
+    throw analyze_error_t{diagnostics};
+  }
+
+  return scope().types.pointer_to(type->as.pointer->deref(), {pointer_kind_t::eNonNullable}, type->as.pointer->is_mutable);
+}
+
 N A::expand(const std::string &source) {
   auto src = std::make_shared<source_t>("expansion", source);
   lexer_t lexer(src);
   parser_t parser(lexer, src);
-  analyzer_t subanalyzer (src);
-  auto info = subanalyzer.analyze(parser.parse());
-  return info.unit.declarations[0];
+  auto info = parser.parse();
+  return info.declarations.front();
 }
 
 QT
@@ -1805,6 +1828,10 @@ A::analyze_node(N &node) {
 
   case ast_node_t::eUnary:
     type = analyze_unary(node);
+    break;
+
+  case ast_node_t::ePointerCoerce:
+    type = analyze_pointer_coerce(node);
     break;
 
   default:

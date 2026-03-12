@@ -110,6 +110,7 @@ private:
   QT analyze_unary(N);
   QT analyze_zero(N);
   QT analyze_uninitialized(N);
+  QT analyze_pointer_coerce(N);
 
   bool is_static_dispatch(N);
   bool is_dynamic_dispatch(N);

@@ -64,6 +64,7 @@ ast_node_t::ast_node_t(const ast_node_t &other) {
     CLONE_CASE(eArrayInitializeExpr, array_initialize_expr, array_initialize_expr_t);
     CLONE_CASE(eTupleExpr, tuple_expr, tuple_expr_t);
     CLONE_CASE(eEnumDecl, enum_decl, enum_decl_t);
+    CLONE_CASE(ePointerCoerce, pointer_coerce_expr, pointer_coerce_expr_t);
   case eSelf:
   case eInvalid:
   case eZero:
@@ -200,6 +201,9 @@ ast_node_t::ast_node_t(const ast_node_t &other) {
     for (auto &[name, v] : other.as.tuple_expr->elements) {
       as.tuple_expr->elements.emplace_back(name, v);
     }
+    break;
+  case ePointerCoerce:
+    as.pointer_coerce_expr->value = std::make_shared<ast_node_t>(*other.as.pointer_coerce_expr->value);
     break;
   default:
     break;

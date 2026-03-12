@@ -25,7 +25,7 @@ struct llvm_scope_t {
   std::map<std::string, SP<llvm_value_t>> symbol_map;
   SP<llvm_scope_t> parent;
 
-  llvm::Value *block_return_value = nullptr;
+  llvm::Value *return_value = nullptr;
   llvm::BasicBlock *exit_block = nullptr, *return_block = nullptr;
   std::vector<SP<ast_node_t>> defer_stack;
 
@@ -90,6 +90,8 @@ private:
   void contract_emit_dynamic_dispatcher(SP<type_t>, const std::string &, SP<type_t>);
   llvm::Value *contract_emit_static_vtable(SP<type_t>, SP<type_t>);
 
+  llvm::Value *string_literal_global_create(const std::string &);
+
   VISITOR(node);
   VISITOR(binding);
   VISITOR(block);
@@ -118,6 +120,8 @@ private:
   VISITOR(slice_expr);
   VISITOR(defer);
   VISITOR(return);
+  VISITOR(array_initializer);
+  VISITOR(pointer_coerce);
   VISITOR(function_decl);
   VISITOR(function_impl);
 

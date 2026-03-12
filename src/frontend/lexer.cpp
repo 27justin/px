@@ -231,6 +231,19 @@ start:
         token.type = tt::operatorGTE;
       break;
     }
+    case '<': {
+      if (del == tt::delimiterLAngle) {
+        source->next();
+        token.type = tt::operatorShiftLeft;
+      }
+      break;
+    }
+    case '>': {
+      if (del == tt::delimiterRAngle) {
+        source->next();
+        token.type = tt::operatorShiftRight;
+      }
+    }
     default:
       break;
     }
@@ -270,8 +283,53 @@ start:
   if (is_number(next)) {
     token.type = tt::literalInt;
 
+    // Check for prefixes (0x, 0b, 0o)
+    if (next == '0') {
+      char prefix = source->peek();
+      bool is_prefixed = false;
+
+      if (prefix == 'x' || prefix == 'X') { // Hex
+        source->next(); // consume 'x'
+        while (true) {
+          char p = source->peek();
+          if (isxdigit(p)) { source->next(); continue; }
+          if (p == '\'') { source->next(); continue; }
+          break;
+        }
+        is_prefixed = true;
+      }
+      else if (prefix == 'b' || prefix == 'B') { // Binary
+        source->next(); // consume 'b'
+        while (true) {
+          char p = source->peek();
+          if (p == '0' || p == '1') { source->next(); continue; }
+          if (p == '\'') { source->next(); continue; }
+          break;
+        }
+        is_prefixed = true;
+      }
+      else if (prefix == 'o' || prefix == 'O') { // Octal
+        source->next(); // consume 'o'
+        while (true) {
+          char p = source->peek();
+          if (p >= '0' && p <= '7') { source->next(); continue; }
+          if (p == '\'') { source->next(); continue; }
+          break;
+        }
+        is_prefixed = true;
+      }
+
+      if (is_prefixed) {
+         // Exit early for prefixed ints
+        token.location.end = {source->line(), source->column()};
+        return token;
+      }
+    }
+
+    // Standard Decimal and Float logic
     while (true) {
       char p = source->peek();
+
       // Allow ' as arbitrary thousands separator
       if (p == '\'') {
         source->next();
@@ -280,30 +338,39 @@ start:
 
       // Check for float
       if (p == '.') {
-        // Look ahead, is this '..' (Range) or '.[0-9]' (Float)?
         char p2 = source->peek(1);
 
-        // If we are already a float, or the next char is '.', stop here
+        // If we are already a float, or the next char is '.', stop here (Range operator case)
         if (token.type == tt::literalFloat || p2 == '.') {
           break;
         }
 
-        // If its a dot followed by a number, its a float decimal
-        if (is_number(p2)) {
+        // If it's a dot followed by a digit, it's a float
+        if (isdigit(p2)) {
           token.type = tt::literalFloat;
           source->next(); // consume '.'
           continue;
         } else {
-          break; // Just a dot, not a float decimal (e.g. 1.something)
+          break; 
         }
       }
 
-      if (is_number(p)) {
+      if (isdigit(p)) {
         source->next();
         continue;
       }
 
-      // Anything else (space, operator, etc.) ends the number
+      // Scientific notation (e.g., 1.0e10 or 10e-5)
+      if ((p == 'e' || p == 'E') && token.type == tt::literalFloat) {
+        // Peek for sign after 'e'
+        char e1 = source->peek(1);
+        if (isdigit(e1) || ((e1 == '+' || e1 == '-') && isdigit(source->peek(2)))) {
+          source->next(); // consume 'e'
+          if (source->peek() == '+' || source->peek() == '-') source->next();
+          continue;
+        }
+      }
+
       break;
     }
   }

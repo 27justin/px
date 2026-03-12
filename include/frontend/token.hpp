@@ -74,6 +74,8 @@ enum class token_type_t {
   operatorCaret,
   operatorBind, // :=
   operatorDeref, // <expression>.*
+  operatorShiftLeft, // <<
+  operatorShiftRight, // >>
 
   delimiterLParen,
   delimiterRParen,
