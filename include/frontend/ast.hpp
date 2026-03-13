@@ -77,6 +77,7 @@ struct tuple_expr_t;
 struct member_access_expr_t;
 struct enum_decl_t;
 struct pointer_coerce_expr_t;
+struct import_expr_t;
 
 enum class literal_type_t {eString, eInteger, eFloat, eBool};
 
@@ -123,7 +124,8 @@ enum class literal_type_t {eString, eInteger, eFloat, eBool};
   X(eEnumDecl)               \
   X(eZero)                   \
   X(eUninitialized)          \
-  X(ePointerCoerce)
+  X(ePointerCoerce)          \
+  X(eImport)
 
 struct ast_node_t {
   ~ast_node_t();
@@ -176,6 +178,7 @@ struct ast_node_t {
       tuple_expr_t *tuple_expr;
       enum_decl_t *enum_decl;
       pointer_coerce_expr_t *pointer_coerce_expr;
+      import_expr_t *import_expr;
       void *raw;
     };
   } as;
@@ -418,6 +421,11 @@ struct tuple_expr_t {
 
 struct pointer_coerce_expr_t {
   SP<ast_node_t> value;
+};
+
+struct import_expr_t {
+  std::string path;
+  std::optional<type_decl_t> type;
 };
 
 std::string to_string(const type_decl_t &);

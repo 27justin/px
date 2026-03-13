@@ -2,6 +2,7 @@
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <fstream>
 #include <filesystem>
 
 #include "backend/analyzer.hpp"
@@ -295,6 +296,8 @@ A::analyze_function_impl(N node, SP<type_t> implicit_receiver) {
   }
 
   auto function = analyze_function_decl(impl->declaration, implicit_receiver);
+  scope().get_parent()->add(*current_binding, function);
+
   push_function(function);
   QT actual_return_type = analyze_node(impl->block);
   pop_function();
@@ -308,7 +311,7 @@ A::analyze_function_impl(N node, SP<type_t> implicit_receiver) {
     diagnostics.messages.push_back(error(node->source, node->location, "Type mismatch", fmt("Function is supposed to return `{}`, but block evaluates to `{}`", to_string(expected_return_type), to_string(actual_return_type))));
     throw analyze_error_t{diagnostics};
   }
-  return analyze_function_decl(impl->declaration, implicit_receiver);;
+  return function;;
 }
 
 QT
@@ -750,11 +753,13 @@ A::analyze_symbol(N node) {
 
   // If we still found nothing, we could be trying to lookup a path on an aliased type
   for (auto it = path.segments.begin(); it != path.segments.end();) {
-    auto i = scope().types.resolve(it->name)->name;
+    auto ty = scope().types.resolve(it->name);
+    if (!ty)
+      break;
     auto pos = std::distance(path.segments.begin(), it);
 
     it = path.segments.erase(it);
-    path.segments.insert(path.segments.begin() + pos, i.segments.begin(), i.segments.end());
+    path.segments.insert(path.segments.begin() + pos, ty->name.segments.begin(), ty->name.segments.end());
 
     try {
       node->as.symbol->path = path;
@@ -1665,12 +1670,63 @@ A::analyze_pointer_coerce(N node) {
   return scope().types.pointer_to(type->as.pointer->deref(), {pointer_kind_t::eNonNullable}, type->as.pointer->is_mutable);
 }
 
-N A::expand(const std::string &source) {
-  auto src = std::make_shared<source_t>("expansion", source);
-  lexer_t lexer(src);
-  parser_t parser(lexer, src);
-  auto info = parser.parse();
-  return info.declarations.front();
+QT
+A::analyze_import(N node) {
+  import_expr_t *expr = node->as.import_expr;
+  if (!expr->type) {
+    diagnostics.messages.push_back(error(source, node->location, "Missing `as`", "Missing `as`, use `[]u8` to import as binary."));
+    throw analyze_error_t{diagnostics};
+  }
+
+  auto ty = expr->type.value();
+  if (to_string(ty) == "[]u8") {
+    // Binary import.
+    //
+    // Read the file and lower the AST node to just a string literal.
+    auto lower = [&node](const std::filesystem::path &file) {
+      std::ifstream s (file);
+      std::stringstream source;
+      source << s.rdbuf();
+
+      auto string = make_node<literal_expr_t>(
+          ast_node_t::eLiteral, literal_expr_t{
+            .value = source.str(),
+            .type = literal_type_t::eString
+          }, node->location, node->source);
+
+      // Yuck... we have to manually set everything.
+      //
+      // TODO: Refactor ast_node_t to be easier to use,
+      // and to support lowering out-of-the-box.
+      node->kind = ast_node_t::eCast;
+      node->as.cast = new cast_expr_t;
+      node->as.cast->type =
+          type_decl_t{.name = {{"u8"}}, .is_mutable = false, .is_slice = true};
+      node->as.cast->value = string;
+    };
+
+    auto filename = expr->path;
+    bool is_lowered = false;
+    for (auto &incl : include_directories) {
+      if (std::filesystem::exists(incl + "/" + filename)) {
+        lower(incl + "/" + filename);
+        is_lowered = true;
+        break;
+      }
+    }
+
+    if (!is_lowered) {
+      diagnostics.messages.push_back(error(source, node->location, "Import not found", fmt("File {} couldn't be found on the include path", filename), "Import files are searched via the include directories (-I), try adding to that."));
+      throw analyze_error_t{diagnostics};
+    }
+
+    // Hand off to analyze_node again to populate type, etc.
+    return analyze_node(node);
+  } else {
+    diagnostics.messages.push_back(error(source, node->location, "Unknown import modifier", fmt("I don't know how to import this file as `{}`.", to_string(ty))));
+    throw analyze_error_t{diagnostics};
+  }
+  return nullptr;
 }
 
 QT
@@ -1832,6 +1888,10 @@ A::analyze_node(N &node) {
 
   case ast_node_t::ePointerCoerce:
     type = analyze_pointer_coerce(node);
+    break;
+
+  case ast_node_t::eImport:
+    type = analyze_import(node);
     break;
 
   default:

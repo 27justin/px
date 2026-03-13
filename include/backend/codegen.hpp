@@ -4,6 +4,7 @@
 #include "backend/type.hpp"
 #include "frontend/ast.hpp"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Passes/OptimizationLevel.h"
 #include <memory>
 
 #include <llvm/IR/LLVMContext.h>
@@ -46,6 +47,8 @@ struct codegen_t {
 
   std::string compile_to_object (std::optional<std::string> filename);
   void compile_to_llvm_ir(std::optional<std::string> filename);
+
+  void set_opt_level(const std::string &level);
 
 private:
   semantic_info_t info;
@@ -129,5 +132,6 @@ private:
   std::optional<specialized_path_t> current_binding;
   std::optional<llvm::GlobalValue::LinkageTypes> current_linkage;
 
+  llvm::OptimizationLevel opt_level;
   std::optional<std::string> external_name; // For FFI
 };

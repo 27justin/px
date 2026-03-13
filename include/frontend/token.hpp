@@ -97,7 +97,7 @@ struct token_t {
   source_location_t location;
 };
 
-const char *to_text(token_type_t);
+const char *to_string(token_type_t);
 
 bool is_operator(token_type_t);
 bool is_keyword(token_type_t);

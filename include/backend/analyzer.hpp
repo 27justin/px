@@ -111,6 +111,7 @@ private:
   QT analyze_zero(N);
   QT analyze_uninitialized(N);
   QT analyze_pointer_coerce(N);
+  QT analyze_import(N);
 
   bool is_static_dispatch(N);
   bool is_dynamic_dispatch(N);
@@ -140,8 +141,6 @@ private:
   bool can_fit_literal(const std::string &, QT target_type);
   QT ensure_concrete(QT);
   bool is_within_bounds(__int128_t, QT);
-
-  N expand(const std::string &v);
 
   specialized_path_t resolve_path(const specialized_path_t&);
 

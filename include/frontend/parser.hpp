@@ -81,6 +81,8 @@ private:
   SP<ast_node_t> parse_for();
   SP<ast_node_t> parse_defer();
 
+  SP<ast_node_t> parse_import_binding();
+
   specialized_path_t parse_import();
 
   bool is_simple_path();
@@ -94,5 +96,8 @@ private:
   bool is_controlflow(SP<ast_node_t>);
 
   binop_type_t binop_type(const token_t &);
+
+  translation_unit_t unit;
 };
 
+SP<ast_node_t> expand(const std::string &v);

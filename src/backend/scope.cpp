@@ -9,6 +9,10 @@ scope_t::scope_t(SP<scope_t> parent)
     , types(parent ? &parent->types : nullptr) {
 }
 
+SP<scope_t>
+scope_t::get_parent() const {
+  return parent;
+}
 
 const std::map<std::string, SP<symbol_t>> &
 scope_t::symbol_map() const {

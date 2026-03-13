@@ -9,6 +9,8 @@ struct scope_t {
   SP<symbol_t> resolve(const std::string &identifier);
   SP<symbol_t> resolve(const specialized_path_t &identifier);
 
+  SP<scope_t> get_parent() const;
+
   /// Return whether the identifier is present in the current scope
   /// (checks only the current symbol table, use `resolve` to
   /// recursively check for a path.)

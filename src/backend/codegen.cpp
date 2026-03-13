@@ -5,6 +5,7 @@
 #include "frontend/ast.hpp"
 #include "frontend/path.hpp"
 #include "frontend/token.hpp"
+#include "llvm/Analysis/InlineAdvisor.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/CmpPredicate.h"
 #include "llvm/IR/Constants.h"
@@ -13,6 +14,11 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Support/CodeGen.h"
+#include "llvm/Transforms/Utils/Mem2Reg.h"
+#include <llvm/Target/TargetOptions.h>
+#include <llvm/MC/TargetRegistry.h>
 
 #include <cassert>
 #include <filesystem>
@@ -84,19 +90,58 @@ codegen_t::init_target() {
   std::string error;
   auto target = llvm::TargetRegistry::lookupTarget(target_triple, error);
 
-  llvm::TargetOptions opts;
-  auto pic_model = llvm::Reloc::Model::PIC_;
-  target_machine = target->createTargetMachine(target_triple, "generic", "", opts, pic_model);
+  llvm::TargetOptions opt;
+
+  std::string cpu = llvm::sys::getHostCPUName().str();
+  llvm::StringMap<bool> feature_map = llvm::sys::getHostCPUFeatures();
+  std::string features_str = "";
+
+  for (auto &f : feature_map) {
+    if (f.second) { // If feature is supported
+      if (!features_str.empty()) features_str += ",";
+      features_str += "+" + f.first().str();
+    }
+  }
+
+  target_machine = target->createTargetMachine(
+    target_triple,
+    cpu,
+    features_str,
+    opt,
+    llvm::Reloc::PIC_,
+    std::nullopt,
+    llvm::CodeGenOptLevel::Aggressive // Matches -O3 for the backend
+    );
 
   module->setDataLayout(target_machine->createDataLayout());
 }
 
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/OptimizationLevel.h"
+
 std::string codegen_t::compile_to_object(std::optional<std::string> filename) {
   std::error_code EC;
-
   auto obj_file = std::filesystem::path(filename.value_or(std::string(source->name())))
-                     .replace_extension(".o")
-                     .string();
+    .replace_extension(".o")
+    .string();
+
+
+  llvm::LoopAnalysisManager LAM;
+  llvm::FunctionAnalysisManager FAM;
+  llvm::CGSCCAnalysisManager CGAM;
+  llvm::ModuleAnalysisManager MAM;
+  llvm::PassBuilder PB;
+
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+  llvm::OptimizationLevel OL = opt_level;
+  llvm::ModulePassManager MPM = PB.buildPerModuleDefaultPipeline(OL);
+
+  MPM.run(*module, MAM);
 
   llvm::legacy::PassManager pass;
   auto file_type = llvm::CodeGenFileType::ObjectFile;
@@ -112,11 +157,29 @@ std::string codegen_t::compile_to_object(std::optional<std::string> filename) {
     pass.run(*module);
     obj_dest.flush();
   }
+
   return obj_file;
 }
 
 void codegen_t::compile_to_llvm_ir(std::optional<std::string> filename) {
   std::error_code EC;
+
+  llvm::LoopAnalysisManager LAM;
+  llvm::FunctionAnalysisManager FAM;
+  llvm::CGSCCAnalysisManager CGAM;
+  llvm::ModuleAnalysisManager MAM;
+  llvm::PassBuilder PB;
+
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+  llvm::OptimizationLevel OL = opt_level;
+  llvm::ModulePassManager MPM = PB.buildPerModuleDefaultPipeline(OL);
+
+  MPM.run(*module, MAM);
 
   if (filename == "-") {
     module->print(llvm::outs(), nullptr);
@@ -126,15 +189,30 @@ void codegen_t::compile_to_llvm_ir(std::optional<std::string> filename) {
   }
 }
 
+void codegen_t::set_opt_level(const std::string &level) {
+  using OL = llvm::OptimizationLevel;
+  static std::map<std::string, OL> levels {
+    {"s", OL::Os},
+    {"z", OL::Oz},
+    {"0", OL::O0},
+    {"1", OL::O1},
+    {"2", OL::O2},
+    {"3", OL::O3},
+  };
+
+  if (!levels.contains(level)) {
+    throw std::runtime_error{"Unknown optimization level " + level};
+  }
+  opt_level = levels.at(level);
+}
 
 codegen_t::codegen_t(std::shared_ptr<source_t> src, semantic_info_t &&s) : source(src), info(std::move(s)) {
   context = std::make_unique<llvm::LLVMContext>();
   module = std::make_unique<llvm::Module>("jcc_module", *context);
   builder = std::make_unique<llvm::IRBuilder<>>(*context);
+  opt_level = llvm::OptimizationLevel::O0;
 
   scopes.push_back(std::make_shared<llvm_scope_t>(nullptr));
-
-  init_target();
 }
 
 void codegen_t::link_external_symbol(const std::string &name, SP<type_t> type) {
@@ -172,6 +250,9 @@ void codegen_t::link_external_symbol(const std::string &name, SP<type_t> type) {
 
 void
 codegen_t::generate() {
+  // Initialize the LLVM target (with optlevel, etc.)
+  init_target();
+
   for (auto &[external, type] : info.imported_symbols) {
     link_external_symbol(external, type);
   }
@@ -1344,7 +1425,13 @@ VISITOR(enum) {
     auto binding = *current_binding;
     binding.push(name);
 
-    scope()->set(to_string(binding), std::make_shared<llvm_value_t>(llvm::ConstantInt::get(storage_type, val), storage_type, true));
+    llvm::GlobalVariable *enum_value = new llvm::GlobalVariable(*module,
+                                                             storage_type,
+                                                             true,
+                                                                llvm::GlobalValue::LinkOnceODRLinkage,
+                                                             llvm::ConstantInt::get(storage_type, val),
+                                                             to_string(binding));
+    scope()->set(to_string(binding), std::make_shared<llvm_value_t>(enum_value, storage_type, true));
   }
   return nullptr;
 }

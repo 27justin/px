@@ -157,8 +157,8 @@ void P::expect(TT ty) {
     return;
   } else {
     diagnostics.messages.push_back(error(
-        source, next.location, fmt(UNEXPECTED_TOKEN, to_text(token.type)),
-        fmt(UNEXPECTED_TOKEN_DETAIL, to_text(next.type), to_text(ty))));
+        source, next.location, fmt(UNEXPECTED_TOKEN, to_string(token.type)),
+        fmt(UNEXPECTED_TOKEN_DETAIL, to_string(next.type), to_string(ty))));
     // TODO: Try to recover to get as much information as possible.
     throw parse_error_t {.diagnostics = diagnostics};
   }
@@ -176,12 +176,12 @@ void P::expect_any(std::vector<TT> types) {
   std::stringstream ss;
   for (int64_t i = 0; i < types.size(); ++i) {
     if (i > 0) ss << ", ";
-    ss << "`" << to_text(types[i]) << "`";
+    ss << "`" << to_string(types[i]) << "`";
   }
 
   auto err = error(source, current.location,
-                   fmt(UNEXPECTED_TOKEN, to_text(current.type)),
-                   fmt(UNEXPECTED_TOKEN_ANY_DETAIL, to_text(current.type), ss.str()));
+                   fmt(UNEXPECTED_TOKEN, to_string(current.type)),
+                   fmt(UNEXPECTED_TOKEN_ANY_DETAIL, to_string(current.type), ss.str()));
   diagnostics.messages.push_back(err);
   throw parse_error_t {.diagnostics = diagnostics};
 }
@@ -197,12 +197,12 @@ token_type_t P::peek_any(std::vector<TT> types) {
   std::stringstream ss;
   for (int64_t i = 0; i < types.size(); ++i) {
     if (i > 0) ss << ", ";
-    ss << "`" << to_text(types[i]) << "`";
+    ss << "`" << to_string(types[i]) << "`";
   }
 
   auto err = error(source, current.location,
-                   fmt(UNEXPECTED_TOKEN, to_text(current.type)),
-                   fmt(UNEXPECTED_TOKEN_ANY_DETAIL, to_text(current.type), ss.str()));
+                   fmt(UNEXPECTED_TOKEN, to_string(current.type)),
+                   fmt(UNEXPECTED_TOKEN_ANY_DETAIL, to_string(current.type), ss.str()));
   diagnostics.messages.push_back(err);
   throw parse_error_t {.diagnostics = diagnostics};
 }
@@ -860,6 +860,10 @@ P::parse_statement() {
   case TT::keywordDefer: {
     return parse_defer();
   }
+  case TT::keywordImport: {
+    unit.imports.push_back(parse_import());
+    return nullptr;
+  }
   default: {
     // This is either:
     //   A. Implicit return
@@ -867,8 +871,16 @@ P::parse_statement() {
     //   C. Variable assignment
     //
     // In any case, all these are handled by parse_expression
-    auto expr = parse_expression();
-    return expr;
+    try {
+      lexer.push();
+      auto expr = parse_identifier();
+      lexer.commit();
+      return expr;
+    } catch (...) {
+      if (diagnostics.messages.size() > 0) diagnostics.messages.pop_back();
+      lexer.pop();
+      return parse_expression();
+    }
   }
   }
   return nullptr;
@@ -1144,14 +1156,49 @@ P::parse_binding() {
     goto done;
   }
 
+  if (peek(TT::keywordImport)) {
+    // We have multiple ways to import stuff.
+    // The first, `import std.string`, imports a source file via the path, this expands to
+    // `std/string.px`, which is then searched for on the include path.
+    //
+    // Second, we can import files directly to embed in the binary
+    // `shader.pixel := import "shader.ps" as []u8`
+    //
+    // `as []u8` here tells the compiler to embed it as a C-string.
+    // This also opens up the possibility to use the import keyword for different things
+    binding = parse_import_binding();
+    goto done;
+  }
+
   // Compile time expression
   binding = parse_expression();
   done:
+  maybe(TT::delimiterSemicolon);
+
   if (attributes) {
     attributes->affect = binding;
     return make_node<attribute_decl_t>(ast_node_t::eAttribute, *attributes, token.location, source);
   }
   return binding;
+}
+
+SP<ast_node_t>
+P::parse_import_binding() {
+  import_expr_t expr {};
+  // import
+  expect(TT::keywordImport);
+
+  auto start = token.location.start;
+
+  // shader.fs
+  expect(TT::literalString);
+  expr.path = source->string(token.location);
+
+  if (maybe(TT::keywordAs)) {
+    expr.type = parse_type();
+  }
+
+  return make_node<import_expr_t>(ast_node_t::eImport, expr, {start, token.location.end}, source);
 }
 
 SP<ast_node_t>
@@ -1312,6 +1359,9 @@ P::parse_identifier() {
 
       return make_node<binding_decl_t>(ast_node_t::eBinding, {path, nullptr, type}, token.location, source);
     }
+
+    diagnostics.messages.push_back(error(source, token.location, "Missing binding", "Expected a binding here, found {}", to_string(lexer.peek(0).type)));
+    throw parse_error_t{diagnostics};
   } else {
     auto path = parse_template_path();
 
@@ -1338,22 +1388,14 @@ P::parse_import() {
 
 translation_unit_t
 P::parse() {
-  translation_unit_t tu {.source = source};
+  unit.source = source;
 
   // Parse until EOF reached
   while (!lexer.eof()) {
     if (lexer.peek().type == TT::specialEof) break;
 
-    switch (lexer.peek().type) {
-    case TT::identifier:
-      tu.declarations.push_back(parse_identifier());
-      break;
-    case TT::keywordImport:
-      tu.imports.push_back(parse_import());
-      break;
-    default:
-      assert(false && "Unhandled parse identifier");
-      break;
+    if (auto node = parse_statement()) {
+      unit.declarations.push_back(node);
     }
   }
 
@@ -1361,7 +1403,7 @@ P::parse() {
     // Pass our diagnostics to the caller
     throw parse_error_t {.diagnostics = std::move(diagnostics)};
   }
-  return tu;
+  return unit;
 }
 
 binop_type_t P::binop_type(const token_t &tok) {
@@ -1408,3 +1450,10 @@ binop_type_t P::binop_type(const token_t &tok) {
   }
 }
 
+SP<ast_node_t> expand(const std::string &source) {
+  auto src = std::make_shared<source_t>("expansion", source);
+  lexer_t lexer(src);
+  parser_t parser(lexer, src);
+  auto info = parser.parse();
+  return info.declarations.front();
+}

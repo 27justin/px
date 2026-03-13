@@ -21,6 +21,7 @@ int main(int argc, char **argv) {
   std::vector<std::string> source_files;
   std::vector<std::string> link_libraries;
   std::optional<std::string> output_file;
+  std::optional<std::string> opt_level;
 
   bool output_object_file = false, output_full_binary = true,
        output_llvm_ir = false, output_ast = false;
@@ -38,6 +39,9 @@ int main(int argc, char **argv) {
     | lyra::opt(output_llvm_ir)
                    ["-S"]
                    .help("Output LLVM IR")
+    | lyra::opt(opt_level, "Optimization Level")
+                   ["-O"]
+                   .help("-Os, -Oz, -Og, -O0..3")
     | lyra::opt(output_file, "Output file")
                    ["-o"]
     | lyra::opt(output_ast)["-dump-ast"].help("Output AST representation")
@@ -52,6 +56,9 @@ int main(int argc, char **argv) {
 
   if (output_object_file || output_llvm_ir)
     output_full_binary = false;
+
+  // Add CWD to the include directories
+  include_directories.push_back(std::filesystem::current_path());
 
   std::vector<std::string> object_files;
 
@@ -75,6 +82,10 @@ int main(int argc, char **argv) {
 
       if (!output_ast) {
         codegen_t codegen(src, std::move(su));
+
+        if (opt_level)
+          codegen.set_opt_level(opt_level.value());
+
         codegen.generate();
 
         if (output_object_file || output_full_binary) {
@@ -111,7 +122,6 @@ int main(int argc, char **argv) {
 void compile_binary(const std::vector<std::string> &object_files,
                     const std::vector<std::string> &libraries,
                     const std::string &output) {
-
     std::filesystem::path out_bin = std::filesystem::absolute(output);
 
     auto cc_path = llvm::sys::findProgramByName("cc");
@@ -119,14 +129,13 @@ void compile_binary(const std::vector<std::string> &object_files,
         throw std::runtime_error("Could not find 'cc' in PATH");
     }
 
-    // 5. Build arguments safely
     std::vector<llvm::StringRef> args;
     args.push_back(*cc_path);
     for (auto &obj : object_files) {
       args.push_back(obj.c_str());
     }
     args.push_back("-o");
-    args.push_back(out_bin.c_str());  // Use the absolute bin path
+    args.push_back(out_bin.c_str());
 
     std::vector<std::string> lib_flags;
     for (const auto& lib : libraries) {

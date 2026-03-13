@@ -137,6 +137,7 @@ ast_node_t::ast_node_t(const ast_node_t &other) {
     break;
   case eCast:
     as.cast->value = std::make_shared<ast_node_t>(*other.as.cast->value);
+    as.cast->type = other.as.cast->type;
     break;
   case eAssignment:
     as.assign_expr->where = std::make_shared<ast_node_t>(*other.as.assign_expr->where);
@@ -205,8 +206,14 @@ ast_node_t::ast_node_t(const ast_node_t &other) {
   case ePointerCoerce:
     as.pointer_coerce_expr->value = std::make_shared<ast_node_t>(*other.as.pointer_coerce_expr->value);
     break;
-  default:
+  case eSymbol: // These cases hold no nested AST node, therefore
+                // don't require manual cloning.
+  case eSizeOf:
+  case eLiteral:
+  case eNil:
     break;
+  default:
+    throw std::runtime_error("Unhandled clone case!");
   }
 }
 
@@ -429,7 +436,7 @@ void dump_ast(ast_node_t &node, size_t indent_val) {
   }
   case ast_node_t::eUnary: {
     unary_expr_t &expr = *node.as.unary;
-    std::cout << "[Unary " << to_text(expr.op);
+    std::cout << "[Unary " << to_string(expr.op);
     dump_ast(*expr.value);
     std::cout << "]";
     return;

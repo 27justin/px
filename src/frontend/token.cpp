@@ -1,6 +1,6 @@
 #include "frontend/token.hpp"
 
-const char *to_text(token_type_t ty) {
+const char *to_string(token_type_t ty) {
   using tt = token_type_t;
   switch (ty) {
   case tt::identifier:

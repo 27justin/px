@@ -7,7 +7,7 @@ __int128_t evaluate_int_literal(const std::string &str) {
   int base = 10;
   __int128_t result = 0;
 
-  // 1. Handle Sign
+  // Signedness
   bool negative = false;
   if (str[idx] == '-') {
     negative = true;
@@ -16,7 +16,7 @@ __int128_t evaluate_int_literal(const std::string &str) {
     idx++;
   }
 
-  // 2. Detect Base Prefix
+  // Base prefix (0x, 0b and 0o)
   if (idx + 1 < str.size() && str[idx] == '0') {
     char prefix = std::tolower(static_cast<unsigned char>(str[idx + 1]));
     if (prefix == 'x') {
@@ -31,7 +31,6 @@ __int128_t evaluate_int_literal(const std::string &str) {
     }
   }
 
-  // 3. Accumulate Digits
   for (; idx < str.size(); ++idx) {
     char c = str[idx];
 
@@ -46,8 +45,7 @@ __int128_t evaluate_int_literal(const std::string &str) {
     }
 
     if (digit == -1 || digit >= base) {
-      // Depending on your error handling, either break or throw
-      break; 
+      break;
     }
 
     // Overflow check (optional but recommended for 128-bit)
@@ -58,3 +56,4 @@ __int128_t evaluate_int_literal(const std::string &str) {
 
   return negative ? -result : result;
 }
+
