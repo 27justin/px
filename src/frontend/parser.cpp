@@ -860,10 +860,6 @@ P::parse_statement() {
   case TT::keywordDefer: {
     return parse_defer();
   }
-  case TT::keywordImport: {
-    unit.imports.push_back(parse_import());
-    return nullptr;
-  }
   default: {
     // This is either:
     //   A. Implicit return
@@ -871,16 +867,8 @@ P::parse_statement() {
     //   C. Variable assignment
     //
     // In any case, all these are handled by parse_expression
-    try {
-      lexer.push();
-      auto expr = parse_identifier();
-      lexer.commit();
-      return expr;
-    } catch (...) {
-      if (diagnostics.messages.size() > 0) diagnostics.messages.pop_back();
-      lexer.pop();
-      return parse_expression();
-    }
+    auto expr = parse_expression();
+    return expr;
   }
   }
   return nullptr;
@@ -1227,6 +1215,7 @@ P::parse_runtime_binding() {
       decl.value = parse_expression();
     }
   }
+
   return make_node<declaration_t>(ast_node_t::eDeclaration, decl, location, source);
 }
 
@@ -1394,8 +1383,16 @@ P::parse() {
   while (!lexer.eof()) {
     if (lexer.peek().type == TT::specialEof) break;
 
-    if (auto node = parse_statement()) {
-      unit.declarations.push_back(node);
+    switch (lexer.peek().type) {
+    case TT::identifier:
+      unit.declarations.push_back(parse_identifier());
+      break;
+    case TT::keywordImport:
+      unit.imports.push_back(parse_import());
+      break;
+    default:
+      assert(false && "Unhandled parse identifier");
+      break;
     }
   }
 
@@ -1451,9 +1448,9 @@ binop_type_t P::binop_type(const token_t &tok) {
 }
 
 SP<ast_node_t> expand(const std::string &source) {
-  auto src = std::make_shared<source_t>("expansion", source);
+  auto src = std::make_shared<source_t>(source, "syntax expansion");
   lexer_t lexer(src);
   parser_t parser(lexer, src);
-  auto info = parser.parse();
-  return info.declarations.front();
+  auto info = parser.parse_statement();
+  return info;
 }

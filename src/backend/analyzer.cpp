@@ -1326,6 +1326,29 @@ A::analyze_for(N node) {
   for_stmt_t *stmt = node->as.for_stmt;
   push_scope();
 
+  // Condition can be two things.
+  //  A. A range_expr_t
+  //  B. A symbol
+  //
+
+  QT condition_type = analyze_node(stmt->condition);
+
+  if (condition_type->kind == type_kind_t::eSlice) {
+    // for s in slice {}
+    auto slice_identifier = to_string(stmt->condition->as.symbol->path);
+
+    stmt->condition = expand(std::format("0..{}.size", slice_identifier));
+
+    auto identifier = stmt->init->as.declaration->identifier;
+    stmt->init->as.declaration->identifier = "_";
+
+    auto block = stmt->body->as.block;
+    block->body.insert(block->body.begin(), expand(std::format("var {} := {}.data[_]", identifier, slice_identifier)));
+
+    pop_scope();
+    return analyze_node(node);
+  }
+
   QT cond = analyze_node(stmt->condition);
 
   if (stmt->init) {
@@ -1556,7 +1579,7 @@ A::analyze_array_initialize(N node) {
   }
 
   for (auto &node : expr->values) {
-    auto element_type = analyze_node(node);
+    auto element_type = ensure_concrete(analyze_node(node));
 
     if (!base_type) {
       base_type = element_type;

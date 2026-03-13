@@ -29,6 +29,7 @@ public:
   parser_t(lexer_t &lexer, std::shared_ptr<source_t> source) : lexer(lexer), source(source), token() {}
 
   translation_unit_t parse();
+  SP<ast_node_t> parse_statement();
 
   diagnostic_stack_t diagnostics;
 private:
@@ -61,7 +62,6 @@ private:
   SP<ast_node_t> parse_function();
   SP<ast_node_t> parse_type_alias();
   SP<ast_node_t> parse_block();
-  SP<ast_node_t> parse_statement();
   SP<ast_node_t> parse_return();
   SP<ast_node_t> parse_primary(bool allow_struct_literal = true);
   SP<ast_node_t> parse_expression(int min_binding_power = 0, bool allow_struct_literal = true);
