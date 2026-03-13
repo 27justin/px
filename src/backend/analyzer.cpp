@@ -1110,6 +1110,12 @@ A::is_cast_convertible(QT from, QT into) {
       from->kind == type_kind_t::eUint && from->size >= 64) {
     return true;
   }
+
+  if (from->kind == type_kind_t::eEnum && into->is_numeric() ||
+      into->kind == type_kind_t::eEnum && from->is_numeric()) {
+    return true;
+  }
+
   return false;
 }
 
