@@ -3,27 +3,34 @@
 #include "frontend/source.hpp"
 #include <frontend/token.hpp>
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
-#include <string_view>
 #include <memory>
 #include <string>
+#include <string_view>
 
 struct lexer_t {
-public:
+  public:
   lexer_t(std::shared_ptr<source_t> source)
-      : source(source),
-        token() {}
+    : source(source)
+    , token() {}
 
-  token_t next();
-  token_t peek(int delta = 0);
-  bool eof() const;
+  token_t
+  next();
+  token_t
+  peek(int delta = 0);
+  bool
+  eof() const;
 
-  void push();
-  void pop();
-  void commit();
-private:
+  void
+  push();
+  void
+  pop();
+  void
+  commit();
+
+  private:
   std::shared_ptr<source_t> source;
-  token_t token;
+  token_t                   token;
 };

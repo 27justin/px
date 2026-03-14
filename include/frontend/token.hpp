@@ -69,12 +69,12 @@ enum class token_type_t {
   operatorDollar,
   operatorTilde,
   operatorArrow,
-  operatorLTE, // <=
-  operatorGTE, // >=
+  operatorLTE,        // <=
+  operatorGTE,        // >=
   operatorCaret,
-  operatorBind, // :=
-  operatorDeref, // <expression>.*
-  operatorShiftLeft, // <<
+  operatorBind,       // :=
+  operatorDeref,      // <expression>.*
+  operatorShiftLeft,  // <<
   operatorShiftRight, // >>
 
   delimiterLParen,
@@ -104,5 +104,3 @@ bool is_keyword(token_type_t);
 bool is_delimiter(token_type_t);
 bool is_literal(token_type_t);
 bool is_identifier(token_type_t);
-
-

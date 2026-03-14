@@ -8,7 +8,8 @@
 bool
 specialized_path_t::is_simple() const {
   for (auto &segment : segments) {
-    if (segment.types.size() > 0) return false;
+    if (segment.types.size() > 0)
+      return false;
   }
 
   return true;
@@ -19,8 +20,8 @@ specialized_path_t::push(const std::string &name) {
   segments.emplace_back(name);
 }
 
-std::size_t std::hash<specialized_path_t>::operator()(
-    const specialized_path_t &path) const noexcept {
+std::size_t
+std::hash<specialized_path_t>::operator()(const specialized_path_t &path) const noexcept {
   return std::hash<std::string>{}(to_string(path));
 }
 
@@ -29,7 +30,8 @@ specialized_path_t::operator==(const specialized_path_t &other) const {
   return to_string(*this) == to_string(other);
 }
 
-std::string to_string(const generic_t &generic) {
+std::string
+to_string(const generic_t &generic) {
   std::stringstream ss;
   ss << generic.binding;
 
@@ -43,7 +45,8 @@ std::string to_string(const generic_t &generic) {
   return ss.str();
 }
 
-std::string to_string(const template_path_t &path) {
+std::string
+to_string(const template_path_t &path) {
   std::stringstream ss;
   for (auto i = 0; i < path.segments.size(); ++i) {
     auto &segment = path.segments[i];
@@ -53,16 +56,19 @@ std::string to_string(const template_path_t &path) {
       for (auto j = 0; j < segment.bindings.size(); ++j) {
         ss << '@';
         ss << to_string(segment.bindings[j]);
-        if (j < segment.bindings.size() - 1) ss << ", ";
+        if (j < segment.bindings.size() - 1)
+          ss << ", ";
       }
       ss << ">";
     }
-    if (i < path.segments.size() - 1) ss << '.';
+    if (i < path.segments.size() - 1)
+      ss << '.';
   }
   return ss.str();
 }
 
-std::string to_string(const specialized_path_t &path) {
+std::string
+to_string(const specialized_path_t &path) {
   std::stringstream ss;
   for (auto i = 0; i < path.segments.size(); ++i) {
     auto &segment = path.segments[i];
@@ -71,22 +77,28 @@ std::string to_string(const specialized_path_t &path) {
       ss << '<';
       for (auto j = 0; j < segment.types.size(); ++j) {
         ss << to_string(*segment.types[j]);
-        if (j < segment.types.size() - 1) ss << ", ";
+        if (j < segment.types.size() - 1)
+          ss << ", ";
       }
       ss << ">";
     }
-    if (i < path.segments.size() - 1) ss << '.';
+    if (i < path.segments.size() - 1)
+      ss << '.';
   }
   return ss.str();
 }
 
-specialized_segment_t::specialized_segment_t(const std::string &name, const std::vector<type_decl_t> &types) : name(name) {
+specialized_segment_t::specialized_segment_t(const std::string              &name,
+                                             const std::vector<type_decl_t> &types)
+  : name(name) {
   for (auto &ty : types) {
     this->types.push_back(std::make_shared<type_decl_t>(ty));
   }
 }
 
-specialized_segment_t::specialized_segment_t(const std::string &name) : name(name), types({}) {}
+specialized_segment_t::specialized_segment_t(const std::string &name)
+  : name(name)
+  , types({}) {}
 
 specialized_path_t::specialized_path_t() {}
 
@@ -94,7 +106,8 @@ specialized_path_t::specialized_path_t(const std::string &name) {
   segments.push_back(name);
 }
 
-specialized_path_t::specialized_path_t(const std::vector<specialized_segment_t> &segments) : segments(segments) {}
+specialized_path_t::specialized_path_t(const std::vector<specialized_segment_t> &segments)
+  : segments(segments) {}
 
 size_t
 template_path_t::params() const {
@@ -118,7 +131,7 @@ template_path_t::param(size_t n) const {
     bindings += segment.bindings.size();
   }
 
-  throw std::runtime_error {"Out of range"};
+  throw std::runtime_error{ "Out of range" };
 }
 
 std::shared_ptr<type_decl_t>
@@ -132,6 +145,5 @@ specialized_path_t::param(size_t n) {
     bindings += segment.types.size();
   }
 
-  throw std::runtime_error {"Out of range"};
+  throw std::runtime_error{ "Out of range" };
 }
-

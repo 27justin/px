@@ -1,10 +1,12 @@
 #include "backend/value.hpp"
 
-__int128_t evaluate_int_literal(const std::string &str) {
-  if (str.empty()) return 0;
+__int128_t
+evaluate_int_literal(const std::string &str) {
+  if (str.empty())
+    return 0;
 
-  size_t idx = 0;
-  int base = 10;
+  size_t     idx    = 0;
+  int        base   = 10;
   __int128_t result = 0;
 
   // Signedness
@@ -35,7 +37,8 @@ __int128_t evaluate_int_literal(const std::string &str) {
     char c = str[idx];
 
     // Skip separators
-    if (c == '\'') continue;
+    if (c == '\'')
+      continue;
 
     int digit = -1;
     if (std::isdigit(static_cast<unsigned char>(c))) {
@@ -56,4 +59,3 @@ __int128_t evaluate_int_literal(const std::string &str) {
 
   return negative ? -result : result;
 }
-
