@@ -1,0 +1,44 @@
+Language: Cpp
+BasedOnStyle: Mozilla
+UseTab: Never
+ColumnLimit: 100
+IndentWidth: 2
+TabWidth: 0
+PointerAlignment: Right
+AccessModifierOffset: 0
+AlignAfterOpenBracket: Align
+NamespaceIndentation: All
+AlignOperands: AlignAfterOperator
+
+BreakConstructorInitializers: BeforeComma
+
+AlignArrayOfStructures: Right
+
+AlignConsecutiveAssignments: Consecutive
+AlignConsecutiveDeclarations: Consecutive
+
+AllowShortLambdasOnASingleLine: Inline
+AllowAllParametersOfDeclarationOnNextLine: false
+
+BinPackArguments: false
+BinPackParameters: false
+AllowAllArgumentsOnNextLine: true
+
+PenaltyReturnTypeOnItsOwnLine: 0
+BreakAfterReturnType: All
+AlwaysBreakAfterReturnType: All
+AlwaysBreakAfterDefinitionReturnType: All
+
+BreakBeforeBraces: Attach
+
+PackConstructorInitializers: Never
+
+AlignTrailingComments:
+  Kind: Always
+  OverEmptyLines: 2
+AllowShortBlocksOnASingleLine: Empty  # Prevent short blocks from being on a single line
+AllowShortCaseLabelsOnASingleLine: false  # Prevent short case labels from being on a single line
+
+SortIncludes: true
+AlignConsecutiveMacros: true
+---
