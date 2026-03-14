@@ -1,14 +1,9 @@
+import enum
+
 calloc := @(extern: "C", import: "calloc") fn (_: u64, _: u64) -> ?any
 printf := @(extern: "C", import: "printf") fn (_: !u8, ..) -> i32
 
-test := fn (s: []i32) {
-  for i in s {
-    printf("%i\n", i);
-  }
-}
-
 main := fn () -> i32 {
-  let s: []i32 = [1,2,99,4,5];
-  test(s);
+  printf("%i, %i\n", system.A, system.B);
   0
 }

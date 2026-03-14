@@ -1,5 +1,6 @@
 #include "frontend/parser.hpp"
 #include "backend/type.hpp"
+#include "backend/value.hpp"
 #include "frontend/ast.hpp"
 #include "frontend/token.hpp"
 #include <optional>
@@ -8,6 +9,7 @@
 #include <sstream>
 #include <cassert>
 #include <string>
+#include <variant>
 
 using TT = token_type_t;
 using P = parser_t;
@@ -421,6 +423,14 @@ P::parse_function_arguments() {
 
   std::vector<SP<ast_node_t>> args;
   while (!peek(TT::delimiterRParen)) {
+    if (lexer.peek(0).type == TT::identifier &&
+        lexer.peek(1).type == TT::operatorColon) {
+      // Specified function parameter name.
+      // Semantically this doesn't mean anything, parameters still have to be ordered correctly.
+      expect(TT::identifier);
+      expect(TT::operatorColon);
+    }
+
     args.emplace_back(parse_expression());
 
     if (peek(TT::operatorComma)) {
@@ -1099,7 +1109,7 @@ P::parse_enum() {
     // We might hardcode the enum value
     if (maybe(TT::operatorEqual)) {
       expect(TT::literalInt);
-      value = std::stoll(source->string(token.location));
+      value = evaluate_int_literal(source->string(token.location));
     }
 
     decl.values[name] = value++;

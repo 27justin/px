@@ -254,7 +254,17 @@ codegen_t::generate() {
   init_target();
 
   for (auto &[external, type] : info.imported_symbols) {
-    link_external_symbol(external, type);
+    if (type->kind != type_kind_t::eEnum) {
+      link_external_symbol(external, type);
+    } else { // Enums aren't linked, we add them as constant values to our scope.
+      auto members = type->as.enum_->values;
+      auto intty = builder->getInt32Ty();
+      for (auto &[name, val] : members) {
+        auto path = type->name;
+        path.push(name);
+        scope()->set(to_string(path), std::make_shared<llvm_value_t>(llvm::ConstantInt::get(intty, val), intty, true));
+      }
+    }
   }
 
   for (auto &node : info.unit.declarations) {
@@ -1425,13 +1435,7 @@ VISITOR(enum) {
     auto binding = *current_binding;
     binding.push(name);
 
-    llvm::GlobalVariable *enum_value = new llvm::GlobalVariable(*module,
-                                                             storage_type,
-                                                             true,
-                                                                llvm::GlobalValue::LinkOnceODRLinkage,
-                                                             llvm::ConstantInt::get(storage_type, val),
-                                                             to_string(binding));
-    scope()->set(to_string(binding), std::make_shared<llvm_value_t>(enum_value, storage_type, true));
+    scope()->set(to_string(binding), std::make_shared<llvm_value_t>(llvm::ConstantInt::get(storage_type, val), storage_type, true));
   }
   return nullptr;
 }
