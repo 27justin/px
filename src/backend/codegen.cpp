@@ -232,7 +232,6 @@ codegen_t::link_external_symbol(const std::string &name, SP<type_t> type) {
 
   switch (type->kind) {
     case type_kind_t::eFunction: {
-
       if (type->as.function->is_aliased) {
         // External functions might be aliased, we need to bitcast the name
         auto               *func_type = llvm::cast<llvm::FunctionType>(llvm_type);
@@ -772,6 +771,11 @@ VISITOR(binding) {
                // something that doesn't actually store something.
     return scope()->set(to_string(decl->name),
                         std::make_shared<llvm_value_t>(cast(node->type, *value)));
+  }
+
+  if (node->type->kind == type_kind_t::eOpaque || node->type->kind == type_kind_t::eAlias) {
+    // If alias, don't link anything.
+    return nullptr;
   }
 
   link_external_symbol(to_string(decl->name), node->type);

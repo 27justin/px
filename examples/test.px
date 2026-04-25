@@ -1,9 +1,16 @@
-import enum
+vec<@T> := struct {
+}
 
-calloc := @(extern: "C", import: "calloc") fn (_: u64, _: u64) -> ?any
-printf := @(extern: "C", import: "printf") fn (_: !u8, ..) -> i32
+vec<@T>.size := fn (!self) -> i32 {
+  0
+}
+
 
 main := fn () -> i32 {
-  printf("%i, %i\n", system.A, system.B);
+  let v: vec<i32> = vec<i32> {};
+
+  let size := v.size();
+  for i in 0..v.size() {
+  }
   0
 }
