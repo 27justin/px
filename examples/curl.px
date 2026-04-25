@@ -5,7 +5,7 @@ CURL := type distinct !any
 CURLcode := type distinct i32
 
 CURL.init := @(extern: "C", import: "curl_easy_init") fn () -> CURL
-CURL.deinit := @(extern: "C", import: "curl_easy_cleanup") fn (_: CURL)
+CURL.deinit := @(extern: "C", import: "curl_easy_cleanup") fn (self)
 CURL.setopt := @(extern: "C", import: "curl_easy_setopt") fn (self, _: i32, ..)
 CURL.perform := @(extern: "C", import: "curl_easy_perform") fn (self) -> CURLcode
 
@@ -36,8 +36,7 @@ main := fn (argc: i32, argv: ?!u8) -> i32 {
   defer payload.deinit();
 
   let curl := CURL.init();
-  //defer curl.deinit();
-  defer CURL.deinit(curl);
+  defer curl.deinit();
 
   curl.setopt(CURLOPT_URL, url);
   curl.setopt(CURLOPT_SSL_VERIFYPEER, 0);

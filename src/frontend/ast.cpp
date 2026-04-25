@@ -220,6 +220,15 @@ ast_node_t::ast_node_t(const ast_node_t &other) {
       as.pointer_coerce_expr->value =
         std::make_shared<ast_node_t>(*other.as.pointer_coerce_expr->value);
       break;
+    case eFunctionDecl:
+      as.fn_decl->is_var_args = other.as.fn_decl->is_var_args;
+      as.fn_decl->return_type = other.as.fn_decl->return_type;
+
+      as.fn_decl->parameters.clear();
+      for (auto &param : other.as.fn_decl->parameters) {
+        as.fn_decl->parameters.emplace_back(param);
+      }
+      break;
     case eSymbol: // These cases hold no nested AST node, therefore
                   // don't require manual cloning.
     case eSizeOf:
