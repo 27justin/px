@@ -283,8 +283,17 @@ A::analyze_function_decl(const function_decl_t &decl, SP<type_t> implicit_receiv
     }
   }
 
-  return scope().types.add_function(
+  auto fn = scope().types.add_function(
     resolve_type(decl.return_type), params, active_receiver, decl.is_var_args);
+
+  if (current_attribute) {
+    if (current_attribute->attributes.contains("import")) {
+      fn->as.function->is_aliased = true;
+      fn->as.function->alias_name = current_attribute->attributes["import"].value;
+    }
+  }
+
+  return fn;
 }
 
 QT
@@ -1854,7 +1863,10 @@ A::analyze_array_initialize(N node) {
 QT
 A::analyze_attribute(N node) {
   attribute_decl_t *attr = node->as.attribute_decl;
-  return analyze_node(attr->affect);
+  current_attribute      = *attr;
+  auto result            = analyze_node(attr->affect);
+  current_attribute      = std::nullopt;
+  return result;
 }
 
 QT

@@ -14,8 +14,6 @@ CURLOPT_SSL_VERIFYPEER: i32 = 64
 CURLOPT_WRITEFUNCTION : i32 = 20011
 CURLOPT_WRITEDATA     : i32 = 10001
 
-libc.exit := @(extern: "C", import: "exit") fn (_: i32)
-
 CURL.string_write_fn := fn (ptr: ?u8, _: u64, nmemb: u64, user_data: ?any) -> u64 {
   let s: ?std.string = user_data;
   let data: []u8 = slice(u8, ptr, nmemb);
@@ -38,7 +36,7 @@ main := fn (argc: i32, argv: ?!u8) -> i32 {
   defer payload.deinit();
 
   let curl := CURL.init();
-  // defer curl.deinit();
+  //defer curl.deinit();
   defer CURL.deinit(curl);
 
   curl.setopt(CURLOPT_URL, url);
@@ -46,7 +44,7 @@ main := fn (argc: i32, argv: ?!u8) -> i32 {
   curl.setopt(CURLOPT_WRITEFUNCTION, CURL.string_write_fn);
   curl.setopt(CURLOPT_WRITEDATA, &payload);
 
-  curl.perform();
-  libc.printf("%s\n", payload.data);
+  let code := curl.perform();
+  libc.printf("%.*s\n", payload.size, payload.data);
   0
 }

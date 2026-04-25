@@ -74,6 +74,7 @@ struct analyzer_t {
   using N  = SP<ast_node_t>;
 
   std::optional<specialized_path_t> current_binding;
+  std::optional<attribute_decl_t>   current_attribute;
 
   bool is_rvalue(N);
   bool is_lvalue(N);

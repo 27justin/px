@@ -232,15 +232,30 @@ codegen_t::link_external_symbol(const std::string &name, SP<type_t> type) {
 
   switch (type->kind) {
     case type_kind_t::eFunction: {
-      auto *func_type = llvm::cast<llvm::FunctionType>(llvm_type);
 
-      auto  func_callee = module->getOrInsertFunction(name, func_type);
-      auto *func        = llvm::cast<llvm::Function>(func_callee.getCallee());
+      if (type->as.function->is_aliased) {
+        // External functions might be aliased, we need to bitcast the name
+        auto               *func_type = llvm::cast<llvm::FunctionType>(llvm_type);
+        llvm::FunctionType *llvm_fn   = llvm::dyn_cast<llvm::FunctionType>(llvm_type);
+        auto                func      = llvm::Function::Create(
+          llvm_fn, llvm::GlobalValue::ExternalLinkage, *type->as.function->alias_name, *module);
 
-      func->setLinkage(llvm::GlobalValue::ExternalLinkage);
+        llvm::Constant *alias =
+          llvm::ConstantExpr::getBitCast(func, llvm::PointerType::get(llvm_fn, 0));
 
-      auto value = std::make_shared<llvm_value_t>(func, llvm_type, false, type);
-      scope()->set(name, value);
+        scope()->set(name, std::make_shared<llvm_value_t>(alias, llvm_fn, false));
+      } else {
+        // Normal function with implementation
+        auto *func_type = llvm::cast<llvm::FunctionType>(llvm_type);
+
+        auto  func_callee = module->getOrInsertFunction(name, func_type);
+        auto *func        = llvm::cast<llvm::Function>(func_callee.getCallee());
+
+        func->setLinkage(llvm::GlobalValue::ExternalLinkage);
+
+        auto value = std::make_shared<llvm_value_t>(func, llvm_type, false, type);
+        scope()->set(name, value);
+      }
       break;
     }
     default: {
@@ -775,33 +790,11 @@ VISITOR(function_decl) {
   auto func = llvm::Function::Create(llvm_fn, llvm::GlobalValue::ExternalLinkage, name, *module);
 
   if (is_import && to_string(*current_binding) != name) {
-    // Functions that are imported will receive a wrapper implementation.
-    //
-    // This is due to GlobalAlias not working on imported symbols.
-
-    auto *wrapper = llvm::Function::Create(
-      llvm_fn, llvm::GlobalValue::ExternalLinkage, to_string(*current_binding), *module);
-
-    auto *bb = llvm::BasicBlock::Create(*context, "entry", wrapper);
-    builder->SetInsertPoint(bb);
-
-    std::vector<llvm::Value *> args;
-    for (auto &arg : wrapper->args())
-      args.push_back(&arg);
-    auto *call = builder->CreateCall(llvm_fn, func, args);
-
-    if (llvm_fn->getReturnType()->isVoidTy()) {
-      builder->CreateRetVoid();
-    } else {
-      builder->CreateRet(call);
-    }
-
-    // Always inline, these functions have to be "invisible" to the
-    // machine.
-    wrapper->addFnAttr(llvm::Attribute::AlwaysInline);
+    llvm::Constant *alias =
+      llvm::ConstantExpr::getBitCast(func, llvm::PointerType::get(llvm_fn, 0));
 
     return scope()->set(to_string(*current_binding),
-                        std::make_shared<llvm_value_t>(wrapper, llvm_type, false));
+                        std::make_shared<llvm_value_t>(alias, llvm_fn, false));
   }
 
   return scope()->set(to_string(*current_binding),

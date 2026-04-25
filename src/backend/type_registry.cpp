@@ -83,6 +83,9 @@ type_registry_t::add_function(SP<type_t>                     return_type,
   signature->receiver    = receiver;
   signature->is_var_args = is_var_args;
 
+  signature->is_aliased = false;
+  signature->alias_name = std::nullopt;
+
   t->kind        = type_kind_t::eFunction;
   t->as.function = signature;
 

@@ -3,6 +3,7 @@
 #include "frontend/path.hpp"
 #include <map>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -75,6 +76,9 @@ struct function_signature_t {
   std::vector<std::shared_ptr<type_t>> arg_types;
   SP<type_t>                           receiver;
   bool                                 is_var_args;
+
+  bool                       is_aliased;
+  std::optional<std::string> alias_name;
 };
 
 struct contract_t {
