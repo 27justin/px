@@ -179,6 +179,15 @@ ast_node_t::ast_node_t(const ast_node_t &other) {
         as.struct_expr->values.emplace(n, std::make_shared<ast_node_t>(*v));
       }
       break;
+    case eStructDecl:
+      as.struct_decl->name = other.as.struct_decl->name;
+      as.struct_decl->members.clear();
+      for (auto &memb : other.as.struct_decl->members) {
+        as.struct_decl->members.push_back(memb);
+      }
+      break;
+    case eZero:
+      break;
     case eDefer:
       as.defer_expr->action = std::make_shared<ast_node_t>(*other.as.defer_expr->action);
       break;
@@ -526,6 +535,12 @@ dump_ast(ast_node_t &node, size_t indent_val) {
 
       std::cout << "[Call ";
       dump_ast(*call.callee);
+
+      if (call.implicit_receiver) {
+        std::cout << " on ";
+        dump_ast(*call.implicit_receiver);
+      }
+
       std::cout << " with (";
 
       for (auto &v : call.arguments) {

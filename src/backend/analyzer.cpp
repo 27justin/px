@@ -509,7 +509,7 @@ A::analyze_call(N node) {
     }
   }
 
-  if (is_dynamic_dispatch(node) && has_receiver) {
+  if (is_dynamic_dispatch(node) && has_receiver && !call->implicit_receiver) {
     // Rewrite the callee symbol, to point the static symbol.
     auto member_function = call->callee->as.symbol->path.segments.back();
 
@@ -1559,7 +1559,6 @@ A::analyze_for(N node) {
   //
 
   QT condition_type = analyze_node(stmt->condition);
-
   if (condition_type->kind == type_kind_t::eSlice) {
     // for s in slice {}
     auto slice_identifier = to_string(stmt->condition->as.symbol->path);
@@ -1577,10 +1576,8 @@ A::analyze_for(N node) {
     return analyze_node(node);
   }
 
-  QT cond = analyze_node(stmt->condition);
-
   if (stmt->init) {
-    push_type_hint(cond);
+    push_type_hint(condition_type);
     QT init = analyze_node(stmt->init);
     pop_type_hint();
   }
