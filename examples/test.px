@@ -1,16 +1,11 @@
-vec<@T> := struct {
-}
 
-vec<@T>.size := fn (!self) -> i32 {
-  0
-}
+let some_value: i32 = zero
+var another_value: i32 = zero
 
+printf := @(extern: "C", import: "printf") fn (_: !u8, ..) -> i32
 
 main := fn () -> i32 {
-  let v: vec<i32> = vec<i32> {};
-
-  let size := v.size();
-  for i in 0..v.size() {
-  }
+  another_value = 42;
+  printf("some_value = %i\nanother_value = %i\n", some_value, another_value);
   0
 }

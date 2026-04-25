@@ -364,13 +364,17 @@ A::analyze_binding(N node) {
   current_binding = decl->name;
 
   QT type = nullptr;
+  if (decl->type) {
+    type = resolve_type(*decl->type);
+    push_type_hint(type);
+  }
 
   if (decl->value) {
     type = analyze_node(decl->value);
   }
 
   if (decl->type) {
-    type = resolve_type(*decl->type);
+    pop_type_hint();
   }
 
   scope().add(decl->name, type, false);
@@ -610,12 +614,12 @@ QT
 A::analyze_declaration(N node) {
   declaration_t *decl = node->as.declaration;
 
-  if (scope().contains(decl->identifier)) {
+  if (scope().contains(to_string(decl->identifier))) {
     diagnostics.messages.push_back(
       error(source,
             node->location,
             "Double declaration",
-            fmt("Symbol {} is already defined in the current scope", decl->identifier)));
+            fmt("Symbol {} is already defined in the current scope", to_string(decl->identifier))));
     throw analyze_error_t{ diagnostics };
   }
 
@@ -1566,11 +1570,12 @@ A::analyze_for(N node) {
     stmt->condition = expand(std::format("0..{}.size", slice_identifier));
 
     auto identifier                        = stmt->init->as.declaration->identifier;
-    stmt->init->as.declaration->identifier = "_";
+    stmt->init->as.declaration->identifier = { { "_" } };
 
     auto block = stmt->body->as.block;
-    block->body.insert(block->body.begin(),
-                       expand(std::format("var {} := {}.data[_]", identifier, slice_identifier)));
+    block->body.insert(
+      block->body.begin(),
+      expand(std::format("var {} := {}.data[_]", to_string(identifier), slice_identifier)));
 
     pop_scope();
     return analyze_node(node);

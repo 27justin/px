@@ -218,7 +218,7 @@ struct contract_decl_t {
 struct declaration_t {
   // let x: i32 = 1;
   // x: i32;
-  std::string                identifier; //< x
+  specialized_path_t         identifier; //< x
   std::optional<type_decl_t> type;       //< i32
   SP<ast_node_t>             value;      //< 1
   bool                       is_mutable; //< let/var, default = false

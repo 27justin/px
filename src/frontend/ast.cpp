@@ -625,7 +625,7 @@ dump_ast(ast_node_t &node, size_t indent_val) {
       declaration_t &decl = *node.as.declaration;
 
       std::cout << "[Declare ";
-      std::cout << decl.identifier;
+      std::cout << to_string(decl.identifier);
       std::cout << " <";
       if (decl.is_mutable) {
         std::cout << "var ";

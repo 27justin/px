@@ -154,6 +154,9 @@ struct codegen_t {
   VISITOR(function_decl);
   VISITOR(function_impl);
 
+  VISITOR(zero);
+  VISITOR(uninitialized);
+
   llvm::TargetMachine                           *target_machine;
   std::optional<specialized_path_t>              current_binding;
   std::optional<llvm::GlobalValue::LinkageTypes> current_linkage;

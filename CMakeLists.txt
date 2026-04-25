@@ -29,12 +29,8 @@ target_include_directories(pxc PRIVATE include)
 # =======
 find_package(LLVM REQUIRED CONFIG)
 
-message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
-message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
+llvm_map_components_to_libnames(llvm_libs core support linker)
+target_include_directories(pxc PRIVATE ${LLVM_INCLUDE_DIRS})
 
-include_directories(${LLVM_INCLUDE_DIRS})
-separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
-add_definitions(${LLVM_DEFINITIONS_LIST})
-
-# Link against LLVM libraries
+#target_link_libraries(pxc ${llvm_libs})
 target_link_libraries(pxc LLVM)

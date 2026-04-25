@@ -12,6 +12,15 @@
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/Program.h>
 
+#include <lld/Common/Driver.h>
+#include <llvm/Support/raw_ostream.h>
+
+LLD_HAS_DRIVER(elf)
+// LLD_HAS_DRIVER(coff)
+// LLD_HAS_DRIVER(mingw)
+// LLD_HAS_DRIVER(macho)
+// LLD_HAS_DRIVER(wasm)
+
 #include <lyra/lyra.hpp>
 
 void
@@ -110,6 +119,10 @@ main(int argc, char **argv) {
   // Link (only if `output_full_binary`)
   if (output_full_binary && !output_ast) {
     compile_binary(object_files, link_libraries, output_file.value_or("a.out"));
+    // Remove temporary object files
+    for (auto &obj_file : object_files) {
+      std::filesystem::remove(obj_file);
+    }
   }
 }
 

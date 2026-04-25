@@ -863,7 +863,7 @@ P::parse_for() {
     expect(TT::identifier);
     for_stmt.init = make_node<declaration_t>(
       ast_node_t::eDeclaration,
-      { .identifier = source->string(token.location),
+      { .identifier = { { source->string(token.location) } },
         .value      = make_node<literal_expr_t>(ast_node_t::eLiteral,
                                                 { .value = "0", .type = literal_type_t::eInteger },
                                            token.location,
@@ -888,7 +888,7 @@ P::parse_for() {
     // No iterator name, just a range expression
     for_stmt.init = make_node<declaration_t>(
       ast_node_t::eDeclaration,
-      { .identifier = "_",
+      { .identifier = { { "_" } },
         .value      = make_node<literal_expr_t>(ast_node_t::eLiteral,
                                                 { .value = "0", .type = literal_type_t::eInteger },
                                            token.location,
@@ -1311,9 +1311,8 @@ P::parse_runtime_binding() {
 
   auto location = token.location;
 
-  expect(TT::identifier);
+  decl.identifier = parse_specialized_path();
   location.end    = token.location.end;
-  decl.identifier = source->string(token.location);
 
   if (maybe(TT::operatorBind)) {
     // Infer the type
@@ -1510,6 +1509,10 @@ P::parse() {
     switch (lexer.peek().type) {
       case TT::identifier:
         unit.declarations.push_back(parse_identifier());
+        break;
+      case TT::keywordLet:
+      case TT::keywordVar:
+        unit.declarations.push_back(parse_runtime_binding());
         break;
       case TT::keywordImport:
         unit.imports.push_back(parse_import());

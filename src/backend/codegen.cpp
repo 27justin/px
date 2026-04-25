@@ -125,7 +125,8 @@ codegen_t::init_target() {
 std::string
 codegen_t::compile_to_object(std::optional<std::string> filename) {
   std::error_code EC;
-  auto            obj_file = std::filesystem::path(filename.value_or(std::string(source->name())))
+  auto            obj_file = (std::filesystem::current_path() /
+                   std::filesystem::path(filename.value_or(std::string(source->name()))).filename())
                     .replace_extension(".o")
                     .string();
 
@@ -520,7 +521,8 @@ codegen_t::ensure_type(SP<type_t> type) {
 llvm_value_t
 codegen_t::load(llvm::Type *type, const llvm_value_t &val) {
   // If it's already a constant or a temporary result, don't load
-  if (llvm::isa<llvm::Constant>(val.value)) {
+  // ... except if it's a GlobalVariable, that has to be loaded.
+  if (llvm::isa<llvm::Constant>(val.value) && !llvm::isa<llvm::GlobalVariable>(val.value)) {
     return val;
   }
 
@@ -993,39 +995,54 @@ VISITOR(block) {
 
 VISITOR(declaration) {
   declaration_t *decl = node->as.declaration;
-
-  llvm::Type  *value_type = ensure_type(node->type);
-  llvm::Value *storage    = builder->CreateAlloca(value_type, 0, nullptr, decl->identifier);
-
   // Is the declaration an lvalue (i.e. has an address and requires
   // loading)
   bool is_lvalue = true;
-  if (decl->value) {
-    switch (decl->value->kind) {
-      case ast_node_t::eZero:
-        // Explicit `zero` keyword.
-        builder->CreateStore(llvm::ConstantInt::getNullValue(value_type), storage);
-        break;
 
-      case ast_node_t::eUninitialized:
-        // Explicit `uninitialized` keyword
-        break;
+  llvm::Type *value_type = ensure_type(node->type);
 
-      default: {
-        auto init = visit_node(decl->value);
-        auto val  = load(init);
-
-        if (val.type != value_type) {
-          val = cast(node->type, val);
-        }
-
-        builder->CreateStore(val.value, storage);
-        break;
-      }
-    }
+  auto         block   = builder->GetInsertBlock();
+  llvm::Value *storage = nullptr;
+  if (block != nullptr) {
+    storage = builder->CreateAlloca(value_type, 0, nullptr, to_string(decl->identifier));
   } else {
-    // Zero initialize by default
-    builder->CreateStore(llvm::ConstantInt::getNullValue(value_type), storage);
+    storage   = new llvm::GlobalVariable(*module,
+                                       value_type,
+                                       !decl->is_mutable,
+                                       llvm::GlobalValue::ExternalLinkage,
+                                       llvm::Constant::getNullValue(value_type),
+                                       to_string(decl->identifier));
+    is_lvalue = true;
+  }
+
+  if (block) {
+    if (decl->value) {
+      switch (decl->value->kind) {
+        case ast_node_t::eZero:
+          // Explicit `zero` keyword.
+          builder->CreateStore(llvm::ConstantInt::getNullValue(value_type), storage);
+          break;
+
+        case ast_node_t::eUninitialized:
+          // Explicit `uninitialized` keyword
+          break;
+
+        default: {
+          auto init = visit_node(decl->value);
+          auto val  = load(init);
+
+          if (val.type != value_type) {
+            val = cast(node->type, val);
+          }
+
+          builder->CreateStore(val.value, storage);
+          break;
+        }
+      }
+    } else {
+      // Zero initialize by default
+      builder->CreateStore(llvm::ConstantInt::getNullValue(value_type), storage);
+    }
   }
 
   if (node->type->kind == type_kind_t::eArray) {
@@ -1034,7 +1051,8 @@ VISITOR(declaration) {
   }
 
   return scopes.back()->set(
-    decl->identifier, std::make_shared<llvm_value_t>(storage, value_type, !is_lvalue, node->type));
+    to_string(decl->identifier),
+    std::make_shared<llvm_value_t>(storage, value_type, !is_lvalue, node->type));
 }
 
 VISITOR(literal) {
@@ -1830,14 +1848,11 @@ VISITOR(pointer_coerce) {
   auto *fail_block   = llvm::BasicBlock::Create(*context, "nil.assert.fail", current_func);
   auto *cont_block   = llvm::BasicBlock::Create(*context, "nil.assert.cont", current_func);
 
-  // Convert pointer to i1 (true if not null, false if null)
   llvm::Value *is_not_null = builder->CreateIsNotNull(val.value, "is_not_null");
   builder->CreateCondBr(is_not_null, cont_block, fail_block);
 
-  // --- Failure Block ---
   builder->SetInsertPoint(fail_block);
 
-  // Signature: void __assert_fail(const char*, const char*, unsigned int, const char*)
   std::vector<llvm::Type *> args = {
     builder->getPtrTy(),   // assertion message
     builder->getPtrTy(),   // file
@@ -1848,8 +1863,6 @@ VISITOR(pointer_coerce) {
   auto assert_func = module->getOrInsertFunction(
     "__assert_fail", llvm::FunctionType::get(builder->getVoidTy(), args, false));
 
-  // Create global string constants for the error metadata
-  // Note: create_string_literal should wrap builder->CreateGlobalStringPtr
   llvm::Value *msg  = string_literal_global_create("Pointer coercion failed: value is nil");
   llvm::Value *file = string_literal_global_create(std::string(node->source->name()));
   llvm::Value *func = string_literal_global_create(current_func->getName().str());
@@ -1858,10 +1871,7 @@ VISITOR(pointer_coerce) {
   builder->CreateCall(assert_func, { msg, file, line, func });
   builder->CreateUnreachable();
 
-  // --- Continue Block ---
   builder->SetInsertPoint(cont_block);
-
-  // Return the original pointer value (now guaranteed non-null)
   return std::make_shared<llvm_value_t>(val.value, val.type, true, val.base_type);
 }
 
