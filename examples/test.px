@@ -4,8 +4,25 @@ var another_value: i32 = zero
 
 printf := @(extern: "C", import: "printf") fn (_: !u8, ..) -> i32
 
+testfn := fn () -> bool {
+  defer printf("test\n");
+
+  if false {
+    return false;
+  }
+
+  var i: i64 = 0;
+  while i < 10 {
+    if i > 5 {
+      return false;
+    }
+    i = i + 1;
+  }
+
+  false
+}
+
 main := fn () -> i32 {
-  another_value = 42;
-  printf("some_value = %i\nanother_value = %i\n", some_value, another_value);
+  testfn();
   0
 }

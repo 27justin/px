@@ -49,6 +49,11 @@
 template<typename T>
 using SP = std::shared_ptr<T>;
 
+llvm_scope_t::llvm_scope_t(SP<llvm_scope_t> parent)
+  : parent(parent) {
+  defer_stack.clear();
+}
+
 SP<llvm_value_t>
 llvm_scope_t::set(const std::string &name, SP<llvm_value_t> value) {
   symbol_map[name] = value;
@@ -1441,7 +1446,7 @@ VISITOR(for) {
   auto *stmt     = node->as.for_stmt;
   auto *function = builder->GetInsertBlock()->getParent();
 
-  scopes.emplace_back(scopes.back());
+  scopes.emplace_back(std::make_shared<llvm_scope_t>(scopes.back()));
 
   // Standard blocks
   llvm::BasicBlock *condBB   = llvm::BasicBlock::Create(*context, "for.cond", function);
@@ -1517,7 +1522,7 @@ VISITOR(while) {
   builder->CreateCondBr(cond_val->value, bodyBB, mergeBB);
 
   builder->SetInsertPoint(bodyBB);
-  scopes.emplace_back(scopes.back());
+  scopes.emplace_back(std::make_shared<llvm_scope_t>(scopes.back()));
   visit_node(stmt->body);
   scopes.pop_back();
 
@@ -1750,6 +1755,7 @@ VISITOR(if) {
       }
     }
   }
+
   if (!builder->GetInsertBlock()->getTerminator()) {
     builder->CreateBr(merge_bb);
   }
@@ -1781,10 +1787,7 @@ VISITOR(member_access) {
 
 VISITOR(defer) {
   defer_expr_t *expr = node->as.defer_expr;
-
-  auto current_scope = scope();
-  current_scope->defer_stack.emplace_back(expr->action);
-
+  scope()->defer_stack.emplace_back(expr->action);
   return nullptr;
 }
 
