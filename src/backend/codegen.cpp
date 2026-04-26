@@ -80,11 +80,14 @@ codegen_t::scope() {
 
 void
 codegen_t::init_target() {
-  llvm::InitializeAllTargetInfos();
-  llvm::InitializeAllTargets();
-  llvm::InitializeAllTargetMCs();
-  llvm::InitializeAllAsmParsers();
-  llvm::InitializeAllAsmPrinters();
+  // llvm::InitializeAllTargetInfos();
+  // llvm::InitializeAllTargets();
+  // llvm::InitializeAllTargetMCs();
+  // llvm::InitializeAllAsmParsers();
+  // llvm::InitializeAllAsmPrinters();
+
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
 
   auto target_triple = llvm::Triple(llvm::sys::getDefaultTargetTriple());
   module->setTargetTriple(target_triple);

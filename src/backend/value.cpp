@@ -1,13 +1,13 @@
 #include "backend/value.hpp"
 
-__int128_t
+int64_t
 evaluate_int_literal(const std::string &str) {
   if (str.empty())
     return 0;
 
-  size_t     idx    = 0;
-  int        base   = 10;
-  __int128_t result = 0;
+  size_t  idx    = 0;
+  int     base   = 10;
+  int64_t result = 0;
 
   // Signedness
   bool negative = false;

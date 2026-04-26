@@ -29,7 +29,10 @@ target_include_directories(pxc PRIVATE include)
 # =======
 find_package(LLVM REQUIRED CONFIG)
 
-llvm_map_components_to_libnames(llvm_libs core support linker)
+llvm_map_components_to_libnames(llvm_libs
+  core support bitwriter bitreader irreader irprinter extensions linker lto
+  passes target targetparser x86info x86disassembler x86targetmca x86asmparser
+  x86codegen)
 target_include_directories(pxc PRIVATE ${LLVM_INCLUDE_DIRS})
 
 #target_link_libraries(pxc ${llvm_libs})

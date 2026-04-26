@@ -163,9 +163,10 @@ struct analyzer_t {
   resolve_type(const std::string &);
 
   bool
-       can_fit_literal(const std::string &, QT target_type);
-  QT   ensure_concrete(QT);
-  bool is_within_bounds(__int128_t, QT);
+     can_fit_literal(const std::string &, QT target_type);
+  QT ensure_concrete(QT);
+  bool
+  is_within_bounds(int64_t, QT);
 
   specialized_path_t
   resolve_path(const specialized_path_t &);

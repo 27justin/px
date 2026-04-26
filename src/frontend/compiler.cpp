@@ -61,7 +61,7 @@ main(int argc, char **argv) {
     output_full_binary = false;
 
   // Add CWD to the include directories
-  include_directories.push_back(std::filesystem::current_path());
+  include_directories.push_back(std::filesystem::current_path().string());
 
   std::vector<std::string> object_files;
 
@@ -143,7 +143,7 @@ compile_binary(const std::vector<std::string> &object_files,
     args.push_back(obj.c_str());
   }
   args.push_back("-o");
-  args.push_back(out_bin.c_str());
+  args.push_back(out_bin.string().c_str());
 
   std::vector<std::string> lib_flags;
   for (const auto &lib : libraries) {

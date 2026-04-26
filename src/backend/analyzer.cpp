@@ -1672,9 +1672,9 @@ A::ensure_concrete(QT ty) {
 }
 
 bool
-A::is_within_bounds(__int128_t val, QT target_type) {
+A::is_within_bounds(int64_t val, QT target_type) {
   if (target_type->kind == type_kind_t::eInt || target_type->kind == type_kind_t::eUint) {
-    __int128_t min{}, max{};
+    int64_t min{}, max{};
 
     if (target_type->size == 8 && target_type->kind == type_kind_t::eUint) {
       min = std::numeric_limits<uint8_t>::min();
@@ -1735,7 +1735,7 @@ bool
 A::can_fit_literal(const std::string &str, QT target_type) {
   if (!target_type->is_numeric())
     return false;
-  __int128_t value = evaluate_int_literal(str);
+  int64_t value = evaluate_int_literal(str);
   return is_within_bounds(value, target_type);
 }
 
