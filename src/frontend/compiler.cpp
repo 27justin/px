@@ -126,38 +126,66 @@ main(int argc, char **argv) {
   }
 }
 
+std::string
+find_linker() {
+#ifdef _WIN32
+  // MSVC
+  if (auto link = llvm::sys::findProgramByName("link"))
+    return *link;
+
+  // MingW
+  if (auto gcc = llvm::sys::findProgramByName("gcc"))
+    return *gcc;
+#else
+  // Linux/macOS
+  if (auto cc = llvm::sys::findProgramByName("cc"))
+    return *cc;
+#endif
+  throw std::runtime_error("No linker found in PATH");
+}
+
 void
 compile_binary(const std::vector<std::string> &object_files,
                const std::vector<std::string> &libraries,
                const std::string              &output) {
+  auto linker   = find_linker();
+  bool is_msvc  = (linker.find("link") != std::string::npos);
+  bool is_linux = !is_msvc;
+
   std::filesystem::path out_bin = std::filesystem::absolute(output);
 
-  auto cc_path = llvm::sys::findProgramByName("cc");
-  if (!cc_path) {
-    throw std::runtime_error("Could not find 'cc' in PATH");
-  }
+  // LLVM takes a StringRef that itself has to be stored somewhere on
+  // the heap.
+  // Therefore two vectors...
+  std::vector<std::string> args;
 
-  std::vector<llvm::StringRef> args;
-  args.push_back(*cc_path);
+  args.push_back(linker);
+
   for (auto &obj : object_files) {
     args.push_back(obj.c_str());
   }
-  args.push_back("-o");
-  args.push_back(out_bin.string().c_str());
 
-  std::vector<std::string> lib_flags;
-  for (const auto &lib : libraries) {
-    lib_flags.push_back("-l" + lib);
+  if (is_linux) {
+    args.push_back("-o");
+    args.push_back(out_bin.string());
+    for (auto &lib : libraries)
+      args.push_back("-l" + lib);
+  } else {
+    args.push_back("/OUT:" + out_bin.string());
+    for (auto &lib : libraries)
+      args.push_back(lib + ".lib");
   }
 
-  for (const auto &flag : lib_flags) {
-    args.push_back(flag);
-  }
+  {
+    std::vector<llvm::StringRef> llvm_args;
+    for (auto const &arg : args)
+      llvm_args.push_back(arg);
 
-  std::string errMsg;
-  int         result = llvm::sys::ExecuteAndWait(*cc_path, args, std::nullopt, {}, 0, 0, &errMsg);
+    std::string err;
+    int         result = llvm::sys::ExecuteAndWait(linker, llvm_args, std::nullopt, {}, 0, 0, &err);
 
-  if (result != 0) {
-    throw std::runtime_error("Linking failed: " + errMsg);
+    if (result != 0) {
+      throw std::runtime_error("Linking failed: " + err);
+    }
   }
 }
