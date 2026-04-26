@@ -128,8 +128,8 @@ codegen_t::init_target() {
 std::string
 codegen_t::compile_to_object(std::optional<std::string> filename) {
   std::error_code EC;
-  auto            obj_file = (std::filesystem::current_path() /
-                   std::filesystem::path(filename.value_or(std::string(source->name()))).filename())
+  auto obj_file = std::filesystem::path(filename.value_or(std::filesystem::current_path().string() +
+                                                          '/' + std::string(source->name())))
                     .replace_extension(".o")
                     .string();
 
