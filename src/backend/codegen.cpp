@@ -1329,7 +1329,7 @@ VISITOR(binop) {
       left_type = result_type;
     }
 
-    if (right_type != result_type) {
+    if (right_type != result_type && !result_type->isPointerTy()) {
       right = visit_node(expr->right);
       right = std::make_shared<llvm_value_t>(builder->CreateIntCast(load(right_type, *right).value,
                                                                     result_type,
@@ -1346,6 +1346,7 @@ VISITOR(binop) {
 
       if (!right)
         right = visit_node(expr->right);
+
       auto intermediate = builder->CreateBinOp(map_binop_type(left_type, right_type, expr->op),
                                                load(left_type, *left).value,
                                                load(right_type, *right).value);

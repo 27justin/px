@@ -19,7 +19,7 @@ type_t::operator==(const type_t &other) const {
       return true;
   }
 
-  if (kind == type_kind_t::ePointer) {
+  if (other.kind == type_kind_t::ePointer && kind == type_kind_t::ePointer) {
     // Special case for pointers, pointers with different mutability
     // are not the same.
     if (other.as.pointer->is_mutable != as.pointer->is_mutable)
