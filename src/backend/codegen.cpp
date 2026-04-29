@@ -1128,6 +1128,20 @@ codegen_t::resolve_member(const llvm_value_t &val, const std::string &member) {
   SP<type_t> struct_type =
     current_type->kind == type_kind_t::ePointer ? current_type->as.pointer->deref() : current_type;
 
+  if (current_type->kind == type_kind_t::eArray) {
+    // Stack arrays have no LLVM struct equivalent, and we can only look up .data, and .size
+    if (member == "size")
+      return std::make_shared<llvm_value_t>(
+        llvm::ConstantInt::get(builder->getInt64Ty(), current_type->as.array->size),
+        builder->getInt64Ty(),
+        true);
+    else // .data, return the stack address
+      return std::make_shared<llvm_value_t>(val.value,
+                                            ensure_type(current_type->as.array->element_type),
+                                            true,
+                                            current_type->as.array->element_type);
+  }
+
   llvm::Type *llvm_struct_type = ensure_type(struct_type);
   int         field_idx        = field_index(llvm_struct_type, member);
 

@@ -936,7 +936,10 @@ A::is_mutable(N node) {
       return is_mutable(node->as.member_access->object);
     }
     case ast_node_t::eDeref: {
-      return is_mutable(node->as.deref_expr->value);
+      assert(node->as.deref_expr->value->type->kind == type_kind_t::ePointer);
+      auto &pointer_type = node->as.deref_expr->value->type;
+
+      return pointer_type->as.pointer->is_mutable;
     }
     default:
       assert(false && "is_mutable on invalid node type");
@@ -1248,7 +1251,7 @@ A::is_implicit_convertible(QT from, QT into) {
 
     // Base Type Compatibility
     // Valid if types match, or if either side is 'any' (Type Erasure/Restoration).
-    bool types_match  = (f->base == i->base);
+    bool types_match  = (*f->base == *i->base);
     bool involves_any = (*f->base == *any || *i->base == *any);
 
     return types_match || involves_any;

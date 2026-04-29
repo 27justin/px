@@ -19,6 +19,22 @@ type_t::operator==(const type_t &other) const {
       return true;
   }
 
+  if (kind == type_kind_t::ePointer) {
+    // Special case for pointers, pointers with different mutability
+    // are not the same.
+    if (other.as.pointer->is_mutable != as.pointer->is_mutable)
+      return false;
+
+    // Same for indirections, nullability has to stay the same across all.
+    if (other.as.pointer->indirections.size() != as.pointer->indirections.size())
+      return false;
+
+    for (auto i = 0; i < other.as.pointer->indirections.size(); ++i) {
+      if (other.as.pointer->indirections[i] != as.pointer->indirections[i])
+        return false;
+    }
+  }
+
   return to_string(other.name) == to_string(name) && other.kind == kind && other.size == size &&
          other.alignment == alignment;
 }
