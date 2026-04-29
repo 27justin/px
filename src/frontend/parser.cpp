@@ -840,10 +840,10 @@ P::parse_if() {
 
   if_stmt_t stmt{};
   stmt.condition = parse_expression(0, false);
-  stmt.pass      = parse_block();
+  stmt.pass      = parse_expression();
 
   if (maybe(TT::keywordElse)) {
-    stmt.reject = parse_block();
+    stmt.reject = parse_expression();
   }
 
   return make_node<if_stmt_t>(ast_node_t::eIf, stmt, location, source);
@@ -951,9 +951,7 @@ P::parse_statement() {
     case TT::keywordIf: {
       return parse_if();
     }
-    case TT::keywordVar: {
-      return parse_runtime_binding();
-    }
+    case TT::keywordVar:
     case TT::keywordLet: {
       return parse_runtime_binding();
     }

@@ -30,6 +30,7 @@ struct llvm_scope_t {
   std::vector<SP<ast_node_t>> defer_stack;
 
   llvm_scope_t(SP<llvm_scope_t> parent);
+  llvm_scope_t(const llvm_scope_t &) = delete;
 
   SP<llvm_value_t>
   resolve(const std::string &);

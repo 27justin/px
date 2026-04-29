@@ -192,7 +192,24 @@ A::resolve_type(const type_decl_t &ty) {
     if (template_candidates.empty()) {
       return nullptr;
     }
-    return monomorphize(template_candidates.front(), ty.name);
+    auto template_type = monomorphize(template_candidates.front(), ty.name);
+    // TODO: Duplicate of above case.
+    if (ty.indirections.size() > 0) {
+      template_type = scope().types.pointer_to(template_type, ty.indirections, ty.is_mutable);
+    }
+
+    if (ty.is_slice && ty.len == nullptr) {
+      template_type = scope().types.slice_of(template_type, ty.is_mutable);
+    }
+
+    if (ty.len != nullptr) {
+      if (ty.len->kind == ast_node_t::eLiteral)
+        template_type =
+          scope().types.array_of(template_type, std::stoll(ty.len->as.literal_expr->value));
+      else
+        template_type = scope().types.slice_of(template_type, ty.is_mutable);
+    }
+    return template_type;
   }
 
   return nullptr;
@@ -1031,6 +1048,15 @@ A::analyze_cast(N node) {
                                              to_string(cast_type))));
     throw analyze_error_t{ diagnostics };
   }
+
+  // If casting into a contract, wrap the node in a address_of
+  if (cast_type->kind == type_kind_t::eContract && decl->value->kind != ast_node_t::eAddrOf &&
+      !is_lvalue(decl->value)) {
+    decl->value = make_node<addr_of_expr_t>(
+      ast_node_t::eAddrOf, { .value = decl->value }, node->location, node->source);
+    analyze_node(decl->value);
+  }
+
   return cast_type;
 }
 
@@ -1674,7 +1700,8 @@ A::ensure_concrete(QT ty) {
 bool
 A::is_within_bounds(int64_t val, QT target_type) {
   if (target_type->kind == type_kind_t::eInt || target_type->kind == type_kind_t::eUint) {
-    int64_t min{}, max{};
+    int64_t  min{};
+    uint64_t max{};
 
     if (target_type->size == 8 && target_type->kind == type_kind_t::eUint) {
       min = std::numeric_limits<uint8_t>::min();

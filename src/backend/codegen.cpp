@@ -591,7 +591,7 @@ codegen_t::cast(SP<type_t> type, const llvm_value_t &value) {
 
     // The resulting fat pointer is an lvalue (duh.. you alloca'd), we
     // have to load it, to be able to retrieve the vtable & data.
-    return llvm_value_t(contract_ptr, generic_contract_type, false);
+    return llvm_value_t(contract_ptr, generic_contract_type, false, type);
   }
 
   // Casting from known size array into runtime slice.
@@ -1043,7 +1043,7 @@ VISITOR(declaration) {
             val = cast(node->type, val);
           }
 
-          builder->CreateStore(val.value, storage);
+          builder->CreateStore(load(val).value, storage);
           break;
         }
       }
@@ -1267,7 +1267,6 @@ codegen_t::is_scalar_binop(binop_type_t ty) {
     case T::eSubtract:
     case T::eDivide:
     case T::eMultiply:
-    case T::eAnd:
     case T::eOr:
     case T::eMod:
       return true;
@@ -1283,8 +1282,9 @@ VISITOR(binop) {
   llvm::Type *right_type  = ensure_type(expr->right->type);
   llvm::Type *result_type = nullptr;
 
-  auto left  = visit_node(expr->left);
-  auto right = visit_node(expr->right);
+  // auto left  = visit_node(expr->left);
+  // auto right = visit_node(expr->right);
+  SP<llvm_value_t> left{}, right{};
 
   if (left_type->isIntOrPtrTy() && right_type->isIntOrPtrTy()) {
     // Figure out the bitsize of each type, we coalesce to the biggest
@@ -1305,6 +1305,7 @@ VISITOR(binop) {
     }
 
     if (left_type != result_type) {
+      left = visit_node(expr->left);
       left = std::make_shared<llvm_value_t>(builder->CreateIntCast(load(left_type, *left).value,
                                                                    result_type,
                                                                    int_result_type->is_signed()),
@@ -1315,6 +1316,7 @@ VISITOR(binop) {
     }
 
     if (right_type != result_type) {
+      right = visit_node(expr->right);
       right = std::make_shared<llvm_value_t>(builder->CreateIntCast(load(right_type, *right).value,
                                                                     result_type,
                                                                     int_result_type->is_signed()),
@@ -1325,6 +1327,11 @@ VISITOR(binop) {
     }
 
     if (is_scalar_binop(expr->op)) {
+      if (!left)
+        left = visit_node(expr->left);
+
+      if (!right)
+        right = visit_node(expr->right);
       auto intermediate = builder->CreateBinOp(map_binop_type(left_type, right_type, expr->op),
                                                load(left_type, *left).value,
                                                load(right_type, *right).value);
@@ -1334,10 +1341,51 @@ VISITOR(binop) {
         true,
         int_result_type);
     } else {
-      // Comparision
+      // && short-circuit evaluation
+      if (expr->op == binop_type_t::eAnd) {
+        llvm::Function *func = builder->GetInsertBlock()->getParent();
+
+        llvm::BasicBlock *rhs_bb   = llvm::BasicBlock::Create(*context, "and.rhs", func);
+        llvm::BasicBlock *merge_bb = llvm::BasicBlock::Create(*context, "and.merge", func);
+
+        auto result_alloca = builder->CreateAlloca(builder->getInt1Ty(), nullptr, "and.res");
+
+        // Emit whatever is needed to get lhs
+        auto lhs_node = visit_node(expr->left);
+        auto lhs_val  = load(lhs_node).value;
+
+        // Store initial result
+        builder->CreateStore(lhs_val, result_alloca);
+        builder->CreateCondBr(lhs_val, rhs_bb, merge_bb);
+
+        // Insert into rhs block
+        builder->SetInsertPoint(rhs_bb);
+        auto rhs_node = visit_node(expr->right);
+        auto rhs_val  = load(rhs_node).value;
+
+        // Store rhs value into result
+        builder->CreateStore(rhs_val, result_alloca);
+        builder->CreateBr(merge_bb);
+
+        builder->SetInsertPoint(merge_bb);
+
+        return std::make_shared<llvm_value_t>(
+          builder->CreateLoad(builder->getInt1Ty(), result_alloca),
+          builder->getInt1Ty(),
+          true,
+          node->type);
+      }
+
+      // Comparison
       bool         is_float = left_type->isFloatingPointTy() || right_type->isFloatingPointTy();
       bool         use_signed_cmp = expr->left->type->is_signed() || expr->right->type->is_signed();
       llvm::Value *value          = nullptr;
+
+      if (!left)
+        left = visit_node(expr->left);
+
+      if (!right)
+        right = visit_node(expr->right);
 
       using P = llvm::CmpInst::Predicate;
       P inst;
@@ -1400,7 +1448,7 @@ VISITOR(binop) {
 
       return std::make_shared<llvm_value_t>(
         builder->CreateICmp(inst, load(left_type, *left).value, load(right_type, *right).value),
-        builder->getIntNTy(1),
+        builder->getInt1Ty(),
         true);
     }
   }
@@ -1565,7 +1613,7 @@ VISITOR(struct_initializer) {
     llvm::Value *field_ptr = builder->CreateStructGEP(struct_ty, struct_ptr, nfield, name);
 
     auto val = visit_node(value_ast);
-    builder->CreateStore(cast(field_type(node->type, name), load(val)).value, field_ptr);
+    builder->CreateStore(load(cast(field_type(node->type, name), *val)).value, field_ptr);
   }
 
   return std::make_shared<llvm_value_t>(struct_ptr, struct_ty);
@@ -1691,9 +1739,15 @@ codegen_t::contract_emit_static_vtable(SP<type_t> contract_ty, SP<type_t> implem
 
   std::vector<llvm::Constant *> elements;
   for (auto it = contract->requirements.begin(); it != contract->requirements.end(); ++it) {
-    auto offset = std::distance(contract->requirements.begin(), it);
-    elements.push_back(llvm::dyn_cast<llvm::Function>(
-      scope()->resolve(to_string(implementor) + "." + it->first)->value));
+    auto ty = implementor;
+    while (ty->base_type() != nullptr) {
+      ty = ty->base_type();
+    }
+
+    auto func_name = to_string(ty);
+
+    auto implementation = scope()->resolve(func_name + "." + it->first);
+    elements.push_back(llvm::dyn_cast<llvm::Function>(implementation->value));
   }
 
   auto *vtable_init = llvm::ConstantStruct::getAnon(*context, elements, true);
